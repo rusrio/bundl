@@ -1,0 +1,319 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+import "forge-std/Test.sol";
+import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
+import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
+import {Hooks} from "v4-core/src/libraries/Hooks.sol";
+import {PoolManager} from "v4-core/src/PoolManager.sol";
+import {PoolKey} from "v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "v4-core/src/types/PoolId.sol";
+import {Currency} from "v4-core/src/types/Currency.sol";
+import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
+import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
+import {PoolSwapTest} from "v4-core/src/test/PoolSwapTest.sol";
+import {PoolModifyLiquidityTest} from "v4-core/src/test/PoolModifyLiquidityTest.sol";
+import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
+
+import {BundlHook} from "../src/BundlHook.sol";
+import {BundlToken} from "../src/BundlToken.sol";
+
+/// @title BundlHookTest
+/// @notice Integration tests for the BundlHook NoOp market maker
+contract BundlHookTest is Test {
+    using PoolIdLibrary for PoolKey;
+    using StateLibrary for IPoolManager;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // STATE
+    // ═══════════════════════════════════════════════════════════════════════
+
+    PoolManager public manager;
+    PoolSwapTest public swapRouter;
+    PoolModifyLiquidityTest public modifyLiqRouter;
+
+    // Mock tokens
+    MockERC20 public usdc;
+    MockERC20 public wbtc;
+    MockERC20 public weth;
+
+    // Bundl system
+    BundlHook public hook;
+    BundlToken public indexToken;
+
+    // Pool keys
+    PoolKey public indexPoolKey;     // IndexToken/USDC
+    PoolKey public wbtcUsdcPoolKey;  // WBTC/USDC
+    PoolKey public wethUsdcPoolKey;  // WETH/USDC
+
+    // Test addresses
+    address public alice = address(0xA11CE);
+
+    // Constants
+    uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336; // sqrt(1) * 2^96
+
+    // Hook required flags: afterInitialize(1<<12) + beforeAddLiquidity(1<<11) + beforeSwap(1<<7) + beforeSwapReturnDelta(1<<3)
+    uint160 constant HOOK_FLAGS = uint160(
+        Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
+            | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
+    );
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SETUP
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function setUp() public {
+        // 1. Deploy PoolManager
+        manager = new PoolManager(address(this));
+
+        // 2. Deploy routers
+        swapRouter = new PoolSwapTest(manager);
+        modifyLiqRouter = new PoolModifyLiquidityTest(manager);
+
+        // 3. Deploy mock tokens
+        usdc = new MockERC20("USD Coin", "USDC", 6);
+        wbtc = new MockERC20("Wrapped Bitcoin", "WBTC", 8);
+        weth = new MockERC20("Wrapped Ether", "WETH", 18);
+
+        // 4. Mint tokens for testing
+        usdc.mint(address(this), type(uint128).max);
+        usdc.mint(alice, 100_000e6);
+        wbtc.mint(address(this), type(uint128).max);
+        weth.mint(address(this), type(uint128).max);
+
+        // 5. Deploy hook at a flagged address
+        // The address must have bits matching HOOK_FLAGS in its lowest 14 bits
+        // HOOK_FLAGS = (1<<12) | (1<<11) | (1<<7) | (1<<3) = 0x1888
+        // We need an address like 0x...1888
+        address hookAddr = address(HOOK_FLAGS); // 0x0000...1888
+
+        // Deploy the hook implementation to that exact address using Foundry's deployCodeTo
+        deployCodeTo(
+            "BundlHook.sol:BundlHook",
+            abi.encode(manager, address(usdc)),
+            hookAddr
+        );
+        hook = BundlHook(hookAddr);
+
+        // 6. Deploy index token with hook as minter
+        indexToken = new BundlToken("Bundl BTC-ETH", "bBTC-ETH", address(hook));
+
+        // 7. Setup underlying pools (WBTC/USDC and WETH/USDC)
+        _setupUnderlyingPools();
+
+        // 8. Initialize the hook
+        _initializeHook();
+
+        // 9. Initialize the index pool (IndexToken/USDC)
+        _initializeIndexPool();
+
+        // 10. Approve routers
+        usdc.approve(address(swapRouter), type(uint256).max);
+        IERC20Minimal(address(indexToken)).approve(address(swapRouter), type(uint256).max);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // TESTS: Initialization
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function test_hookIsInitialized() public view {
+        assertTrue(hook.initialized());
+        assertEq(address(hook.indexToken()), address(indexToken));
+    }
+
+    function test_underlyingConfig() public view {
+        address[] memory tokens = hook.getUnderlyingTokens();
+        assertEq(tokens.length, 2);
+
+        uint256[] memory amounts = hook.getAmountsPerUnit();
+        assertEq(amounts.length, 2);
+    }
+
+    function test_hookAddressHasCorrectFlags() public view {
+        assertTrue(uint160(address(hook)) & Hooks.BEFORE_SWAP_FLAG != 0, "Missing BEFORE_SWAP_FLAG");
+        assertTrue(uint160(address(hook)) & Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG != 0, "Missing BEFORE_SWAP_RETURNS_DELTA_FLAG");
+        assertTrue(uint160(address(hook)) & Hooks.AFTER_INITIALIZE_FLAG != 0, "Missing AFTER_INITIALIZE_FLAG");
+        assertTrue(uint160(address(hook)) & Hooks.BEFORE_ADD_LIQUIDITY_FLAG != 0, "Missing BEFORE_ADD_LIQUIDITY_FLAG");
+    }
+
+    function test_cannotReinitialize() public {
+        address[] memory tokens = new address[](1);
+        uint256[] memory amounts = new uint256[](1);
+        PoolKey[] memory poolKeys = new PoolKey[](1);
+        bool[] memory usdcIs0 = new bool[](1);
+
+        vm.expectRevert(BundlHook.AlreadyInitialized.selector);
+        hook.initialize(address(indexToken), tokens, amounts, poolKeys, usdcIs0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // TESTS: Redeem
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function test_redeemGivesUnderlyingAssets() public {
+        uint256[] memory amounts = hook.getAmountsPerUnit();
+        uint256 units = 2;
+
+        // Fund the hook with underlying assets (simulating previous buys)
+        wbtc.transfer(address(hook), amounts[0] * units);
+        weth.transfer(address(hook), amounts[1] * units);
+
+        // Mint index tokens to alice (hook is the minter)
+        vm.prank(address(hook));
+        indexToken.mint(alice, units * 1e18);
+
+        // Record balances before redeem
+        uint256 wbtcBefore = wbtc.balanceOf(alice);
+        uint256 wethBefore = weth.balanceOf(alice);
+
+        // Redeem
+        vm.prank(alice);
+        hook.redeem(units);
+
+        // Verify alice received underlying assets
+        assertEq(wbtc.balanceOf(alice), wbtcBefore + amounts[0] * units, "WBTC not received");
+        assertEq(weth.balanceOf(alice), wethBefore + amounts[1] * units, "WETH not received");
+        assertEq(indexToken.balanceOf(alice), 0, "IndexToken not burned");
+    }
+
+    function test_revertRedeemZeroUnits() public {
+        vm.prank(alice);
+        vm.expectRevert(BundlHook.ZeroUnits.selector);
+        hook.redeem(0);
+    }
+
+    function test_revertRedeemInsufficientBacking() public {
+        // Mint tokens to alice without funding the hook
+        vm.prank(address(hook));
+        indexToken.mint(alice, 1e18);
+
+        vm.prank(alice);
+        vm.expectRevert(BundlHook.InsufficientBacking.selector);
+        hook.redeem(1);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // TESTS: Access Control
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function test_revertDirectCallToBeforeSwap() public {
+        vm.prank(alice);
+        vm.expectRevert(BundlHook.NotPoolManager.selector);
+        hook.beforeSwap(
+            address(0),
+            indexPoolKey,
+            IPoolManager.SwapParams({zeroForOne: true, amountSpecified: -1000, sqrtPriceLimitX96: 0}),
+            ""
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // TESTS: View Functions
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function test_getTotalBacking() public view {
+        uint256[] memory backing = hook.getTotalBacking();
+        assertEq(backing.length, 2);
+        assertEq(backing[0], 0, "WBTC backing should be 0 initially");
+        assertEq(backing[1], 0, "WETH backing should be 0 initially");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // TESTS: Block Direct Liquidity
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function test_revertDirectLiquidityAddition() public {
+        // Try to add liquidity directly to the index pool (should be blocked by hook)
+        usdc.approve(address(modifyLiqRouter), type(uint256).max);
+
+        vm.expectRevert();
+        modifyLiqRouter.modifyLiquidity(
+            indexPoolKey,
+            IPoolManager.ModifyLiquidityParams({
+                tickLower: -887220,
+                tickUpper: 887220,
+                liquidityDelta: 1000e6,
+                salt: bytes32(0)
+            }),
+            ""
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // INTERNAL: SETUP HELPERS
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function _setupUnderlyingPools() internal {
+        // Approve tokens for the modify liquidity router
+        usdc.approve(address(modifyLiqRouter), type(uint256).max);
+        wbtc.approve(address(modifyLiqRouter), type(uint256).max);
+        weth.approve(address(modifyLiqRouter), type(uint256).max);
+
+        // Create WBTC/USDC pool (no hooks)
+        (Currency c0, Currency c1) = _sortCurrencies(address(wbtc), address(usdc));
+        wbtcUsdcPoolKey = PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: IHooks(address(0))});
+        manager.initialize(wbtcUsdcPoolKey, SQRT_PRICE_1_1);
+
+        // Add liquidity to WBTC/USDC
+        modifyLiqRouter.modifyLiquidity(
+            wbtcUsdcPoolKey,
+            IPoolManager.ModifyLiquidityParams({
+                tickLower: -887220,
+                tickUpper: 887220,
+                liquidityDelta: 1e8,
+                salt: bytes32(0)
+            }),
+            ""
+        );
+
+        // Create WETH/USDC pool (no hooks)
+        (c0, c1) = _sortCurrencies(address(weth), address(usdc));
+        wethUsdcPoolKey = PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: IHooks(address(0))});
+        manager.initialize(wethUsdcPoolKey, SQRT_PRICE_1_1);
+
+        // Add liquidity to WETH/USDC
+        modifyLiqRouter.modifyLiquidity(
+            wethUsdcPoolKey,
+            IPoolManager.ModifyLiquidityParams({
+                tickLower: -887220,
+                tickUpper: 887220,
+                liquidityDelta: 1e8,
+                salt: bytes32(0)
+            }),
+            ""
+        );
+    }
+
+    function _initializeHook() internal {
+        address[] memory tokens = new address[](2);
+        uint256[] memory amounts = new uint256[](2);
+        PoolKey[] memory poolKeys = new PoolKey[](2);
+        bool[] memory usdcIs0 = new bool[](2);
+
+        tokens[0] = address(wbtc);
+        amounts[0] = 0.001e8; // 0.001 WBTC per index unit
+        poolKeys[0] = wbtcUsdcPoolKey;
+        usdcIs0[0] = Currency.unwrap(wbtcUsdcPoolKey.currency0) == address(usdc);
+
+        tokens[1] = address(weth);
+        amounts[1] = 0.5e18; // 0.5 WETH per index unit
+        poolKeys[1] = wethUsdcPoolKey;
+        usdcIs0[1] = Currency.unwrap(wethUsdcPoolKey.currency0) == address(usdc);
+
+        hook.initialize(address(indexToken), tokens, amounts, poolKeys, usdcIs0);
+    }
+
+    function _initializeIndexPool() internal {
+        (Currency c0, Currency c1) = _sortCurrencies(address(indexToken), address(usdc));
+        indexPoolKey = PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: IHooks(address(hook))});
+        manager.initialize(indexPoolKey, SQRT_PRICE_1_1);
+    }
+
+    function _sortCurrencies(address a, address b) internal pure returns (Currency, Currency) {
+        return a < b ? (Currency.wrap(a), Currency.wrap(b)) : (Currency.wrap(b), Currency.wrap(a));
+    }
+}
+
+interface IERC20Minimal {
+    function approve(address spender, uint256 amount) external returns (bool);
+}
