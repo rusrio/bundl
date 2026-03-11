@@ -50,15 +50,17 @@ contract BundlHookTest is Test {
     uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
     uint8   constant USDC_DECIMALS  = 6;
 
-    // Hook required flags
+    // 100 USDC — realistic amount that avoids uint256 overflow in units * 1e18
+    // With amountsPerUnit=1e6 and 50/50 split: usdcPerToken=50e6,
+    // underlyingReceived~50e6, units=50e6/1e6=50, indexTokens=50*1e18 (safe)
+    uint256 constant SWAP_USDC_AMOUNT = 100e6;
+
     uint160 constant HOOK_FLAGS = uint160(
         Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
             | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
     );
 
-    // A second valid hook address for isolation tests:
-    // We set a high bit (bit 20) that is outside ALL_HOOK_MASK (14 bits),
-    // so the flags check still passes but the address is different from hook.
+    // Second hook address for isolation tests: extra bit outside ALL_HOOK_MASK (14 bits)
     uint160 constant HOOK_FLAGS_2 = HOOK_FLAGS | (1 << 20);
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -79,7 +81,6 @@ contract BundlHookTest is Test {
         wbtc.mint(address(this), type(uint128).max);
         weth.mint(address(this), type(uint128).max);
 
-        // Deploy hook at flagged address
         deployCodeTo(
             "BundlHook.sol:BundlHook",
             abi.encode(manager, address(usdc), USDC_DECIMALS),
@@ -127,12 +128,12 @@ contract BundlHookTest is Test {
     }
 
     function test_cannotReinitialize() public {
-        address[] memory tokens = new address[](1);
-        uint256[] memory amounts = new uint256[](1);
-        uint256[] memory weights = new uint256[](1);
+        address[] memory tokens   = new address[](1);
+        uint256[] memory amounts  = new uint256[](1);
+        uint256[] memory weights  = new uint256[](1);
         PoolKey[] memory poolKeys = new PoolKey[](1);
-        bool[] memory usdcIs0 = new bool[](1);
-        uint8[] memory decimals = new uint8[](1);
+        bool[]    memory usdcIs0  = new bool[](1);
+        uint8[]   memory decimals = new uint8[](1);
         weights[0] = 10000;
 
         vm.expectRevert(BundlHook.AlreadyInitialized.selector);
@@ -140,7 +141,6 @@ contract BundlHookTest is Test {
     }
 
     function test_invalidWeightsRevert() public {
-        // Deploy a second hook at HOOK_FLAGS_2 (same permission bits, different address)
         deployCodeTo(
             "BundlHook.sol:BundlHook",
             abi.encode(manager, address(usdc), USDC_DECIMALS),
@@ -155,11 +155,11 @@ contract BundlHookTest is Test {
         bool[]    memory usdcIs0  = new bool[](2);
         uint8[]   memory decimals = new uint8[](2);
 
-        tokens[0] = address(wbtc);  tokens[1] = address(weth);
-        amounts[0] = 1;             amounts[1] = 1;
-        weights[0] = 3000;          weights[1] = 3000; // sum = 6000 != 10000
+        tokens[0] = address(wbtc);     tokens[1] = address(weth);
+        amounts[0] = 1e6;              amounts[1] = 1e6;
+        weights[0] = 3000;             weights[1] = 3000; // sum = 6000 != 10000
         poolKeys[0] = wbtcUsdcPoolKey; poolKeys[1] = wethUsdcPoolKey;
-        decimals[0] = 8;            decimals[1] = 18;
+        decimals[0] = 8;               decimals[1] = 18;
 
         vm.expectRevert(BundlHook.InvalidWeights.selector);
         hook2.initialize(address(indexToken), tokens, amounts, weights, poolKeys, usdcIs0, decimals);
@@ -256,14 +256,13 @@ contract BundlHookTest is Test {
     // ═══════════════════════════════════════════════════════════════════════
 
     function test_buyExactUsdcForIndex() public {
-        // With pools at 1:1 price, amountsPerUnit = 1 wei each, and 50/50 weights:
-        // 3e18 USDC total -> 1.5e18 per token -> receives ~1.5e18 wei of each underlying
-        // units = min(1.5e18 / 1, 1.5e18 / 1) = 1.5e18 >> 1, so mints >= 1 index token
-        uint256 usdcAmount = 3e18;
-
-        usdc.mint(alice, usdcAmount);
+        // 100 USDC, 50/50 split -> 50e6 per token
+        // pools at 1:1 -> receive ~50e6 wei of each underlying (minus 0.3% fee)
+        // amountsPerUnit = 1e6 -> units = 50e6 / 1e6 = ~50
+        // indexTokensMinted = 50 * 1e18 = 5e19 (well within uint256)
+        usdc.mint(alice, SWAP_USDC_AMOUNT);
         vm.prank(alice);
-        usdc.approve(address(swapRouter), usdcAmount);
+        usdc.approve(address(swapRouter), SWAP_USDC_AMOUNT);
 
         bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
 
@@ -272,7 +271,7 @@ contract BundlHookTest is Test {
             indexPoolKey,
             IPoolManager.SwapParams({
                 zeroForOne: zeroForOne,
-                amountSpecified: -int256(usdcAmount),
+                amountSpecified: -int256(SWAP_USDC_AMOUNT),
                 sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
             }),
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
@@ -311,11 +310,9 @@ contract BundlHookTest is Test {
     }
 
     function test_slippageRevert() public {
-        uint256 usdcAmount = 3e18;
-
-        usdc.mint(alice, usdcAmount);
+        usdc.mint(alice, SWAP_USDC_AMOUNT);
         vm.prank(alice);
-        usdc.approve(address(swapRouter), usdcAmount);
+        usdc.approve(address(swapRouter), SWAP_USDC_AMOUNT);
 
         bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
         bytes memory hookData = abi.encode(uint256(9999999999e18));
@@ -326,7 +323,7 @@ contract BundlHookTest is Test {
             indexPoolKey,
             IPoolManager.SwapParams({
                 zeroForOne: zeroForOne,
-                amountSpecified: -int256(usdcAmount),
+                amountSpecified: -int256(SWAP_USDC_AMOUNT),
                 sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
             }),
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
@@ -370,18 +367,18 @@ contract BundlHookTest is Test {
         bool[]    memory usdcIs0  = new bool[](2);
         uint8[]   memory decimals = new uint8[](2);
 
-        // amountsPerUnit = 1 wei each.
-        // With pools at 1:1 and 50/50 weight split:
-        //   usdcForToken = totalUsdc * 5000 / 10000
-        //   underlyingReceived ~ usdcForToken (minus tiny fee)
-        //   units = underlyingReceived / 1 = underlyingReceived
-        // So even a small USDC amount mints many units.
-        tokens[0]   = address(wbtc); amounts[0] = 1; weights[0] = 5000;
+        // amountsPerUnit = 1e6 (same magnitude as USDC wei)
+        // With SWAP_USDC_AMOUNT=100e6 and 50/50 split:
+        //   usdcPerToken = 50e6
+        //   underlyingReceived ~ 50e6 (1:1 pool, minus tiny fee)
+        //   units = 50e6 / 1e6 = ~50
+        //   indexTokensMinted = 50 * 1e18 = 5e19 (safe, no overflow)
+        tokens[0]   = address(wbtc); amounts[0] = 1e6; weights[0] = 5000;
         poolKeys[0] = wbtcUsdcPoolKey;
         usdcIs0[0]  = Currency.unwrap(wbtcUsdcPoolKey.currency0) == address(usdc);
         decimals[0] = 8;
 
-        tokens[1]   = address(weth); amounts[1] = 1; weights[1] = 5000;
+        tokens[1]   = address(weth); amounts[1] = 1e6; weights[1] = 5000;
         poolKeys[1] = wethUsdcPoolKey;
         usdcIs0[1]  = Currency.unwrap(wethUsdcPoolKey.currency0) == address(usdc);
         decimals[1] = 18;
