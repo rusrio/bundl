@@ -18,6 +18,32 @@ contract BundlFactory {
     using PoolIdLibrary for PoolKey;
 
     // ═══════════════════════════════════════════════════════════════════════
+    // STRUCTS
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Parameters for creating a new Bundl index
+    struct CreateBundlParams {
+        /// @notice Token name (e.g. "Bundl BTC-ETH")
+        string name;
+        /// @notice Token symbol (e.g. "bBTC-ETH")
+        string symbol;
+        /// @notice Addresses of the underlying tokens
+        address[] underlyingTokens;
+        /// @notice Amount of each underlying per 1 index unit
+        uint256[] amountsPerUnit;
+        /// @notice Weight of each underlying in basis points (must sum to 10000)
+        uint256[] weightsBps;
+        /// @notice PoolKeys for USDC/<token> pools used to swap
+        PoolKey[] underlyingPools;
+        /// @notice Whether USDC is currency0 in each underlying pool
+        bool[] usdcIs0;
+        /// @notice Decimals of each underlying token
+        uint8[] tokenDecimals;
+        /// @notice Initial sqrt price for the IndexToken/USDC pool
+        uint160 sqrtPriceX96;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // EVENTS
     // ═══════════════════════════════════════════════════════════════════════
 
@@ -44,7 +70,7 @@ contract BundlFactory {
     address public immutable usdc;
     uint8 public immutable usdcDecimals;
 
-    /// @notice Required hook flags: afterInitialize + beforeAddLiquidity + beforeSwap + beforeSwapReturnDelta
+    /// @notice Required hook flags
     uint160 internal constant REQUIRED_FLAGS = Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
         | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG;
 
@@ -63,29 +89,14 @@ contract BundlFactory {
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Deploy a complete Bundl system: IndexToken + Hook + Pool
-    /// @param name                 Token name (e.g. "Bundl BTC-ETH")
-    /// @param symbol               Token symbol (e.g. "bBTC-ETH")
-    /// @param underlyingTokens     Addresses of underlying tokens [WBTC, WETH, ...]
-    /// @param amountsPerUnit       Amount of each underlying per 1 index unit
-    /// @param weightsBps           Weight of each underlying in basis points (must sum to 10000)
-    /// @param underlyingPools      PoolKeys for USDC/<token> pools
-    /// @param usdcIs0              Whether USDC is currency0 in each underlying pool
-    /// @param tokenDecimals        Decimals of each underlying token (e.g. [8, 18] for WBTC/WETH)
-    /// @param sqrtPriceX96         Initial sqrt price for the IndexToken/USDC pool
-    /// @return hook                The deployed BundlHook address
-    /// @return token               The deployed BundlToken address
-    /// @return poolId              The PoolId of the IndexToken/USDC pool
-    function createBundl(
-        string calldata name,
-        string calldata symbol,
-        address[] calldata underlyingTokens,
-        uint256[] calldata amountsPerUnit,
-        uint256[] calldata weightsBps,
-        PoolKey[] calldata underlyingPools,
-        bool[] calldata usdcIs0,
-        uint8[] calldata tokenDecimals,
-        uint160 sqrtPriceX96
-    ) external returns (address hook, address token, PoolId poolId) {
+    /// @param p  All deployment parameters packed in a struct (avoids stack-too-deep)
+    /// @return hook    The deployed BundlHook address
+    /// @return token   The deployed BundlToken address
+    /// @return poolId  The PoolId of the IndexToken/USDC pool
+    function createBundl(CreateBundlParams calldata p)
+        external
+        returns (address hook, address token, PoolId poolId)
+    {
         // 1. Mine the CREATE2 salt and deploy the hook
         bytes memory hookCreationCode = abi.encodePacked(
             type(BundlHook).creationCode,
@@ -94,7 +105,6 @@ contract BundlFactory {
 
         bytes32 salt = _mineSalt(hookCreationCode, REQUIRED_FLAGS);
 
-        // Deploy hook via CREATE2
         address hookAddr;
         assembly {
             hookAddr := create2(0, add(hookCreationCode, 0x20), mload(hookCreationCode), salt)
@@ -102,17 +112,17 @@ contract BundlFactory {
         if (hookAddr == address(0)) revert SaltMiningFailed();
 
         // 2. Deploy the index token with the hook as minter
-        BundlToken indexToken = new BundlToken(name, symbol, hookAddr);
+        BundlToken indexToken = new BundlToken(p.name, p.symbol, hookAddr);
 
-        // 3. Initialize the hook with configuration
+        // 3. Initialize the hook
         BundlHook(hookAddr).initialize(
             address(indexToken),
-            underlyingTokens,
-            amountsPerUnit,
-            weightsBps,
-            underlyingPools,
-            usdcIs0,
-            tokenDecimals
+            p.underlyingTokens,
+            p.amountsPerUnit,
+            p.weightsBps,
+            p.underlyingPools,
+            p.usdcIs0,
+            p.tokenDecimals
         );
 
         // 4. Create and initialize the IndexToken/USDC pool
@@ -134,13 +144,13 @@ contract BundlFactory {
             hooks: IHooks(hookAddr)
         });
 
-        poolManager.initialize(poolKey, sqrtPriceX96);
+        poolManager.initialize(poolKey, p.sqrtPriceX96);
 
         hook = hookAddr;
         token = address(indexToken);
         poolId = poolKey.toId();
 
-        emit BundlCreated(hook, token, poolId, underlyingTokens, amountsPerUnit, weightsBps);
+        emit BundlCreated(hook, token, poolId, p.underlyingTokens, p.amountsPerUnit, p.weightsBps);
     }
 
     // ═══════════════════════════════════════════════════════════════════════

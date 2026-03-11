@@ -17,6 +17,7 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 
 import {BundlHook} from "../src/BundlHook.sol";
+import {BundlFactory} from "../src/BundlFactory.sol";
 import {BundlToken} from "../src/BundlToken.sol";
 
 /// @title BundlHookTest
@@ -33,28 +34,22 @@ contract BundlHookTest is Test {
     PoolSwapTest public swapRouter;
     PoolModifyLiquidityTest public modifyLiqRouter;
 
-    // Mock tokens
     MockERC20 public usdc;
     MockERC20 public wbtc;
     MockERC20 public weth;
 
-    // Bundl system
     BundlHook public hook;
     BundlToken public indexToken;
 
-    // Pool keys
-    PoolKey public indexPoolKey;     // IndexToken/USDC
-    PoolKey public wbtcUsdcPoolKey;  // WBTC/USDC
-    PoolKey public wethUsdcPoolKey;  // WETH/USDC
+    PoolKey public indexPoolKey;
+    PoolKey public wbtcUsdcPoolKey;
+    PoolKey public wethUsdcPoolKey;
 
-    // Test addresses
     address public alice = address(0xA11CE);
 
-    // Constants
     uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
-    uint8  constant USDC_DECIMALS   = 6;
+    uint8   constant USDC_DECIMALS  = 6;
 
-    // Hook required flags
     uint160 constant HOOK_FLAGS = uint160(
         Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
             | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
@@ -65,25 +60,19 @@ contract BundlHookTest is Test {
     // ═══════════════════════════════════════════════════════════════════════
 
     function setUp() public {
-        // 1. Deploy PoolManager
         manager = new PoolManager(address(this));
-
-        // 2. Deploy routers
         swapRouter = new PoolSwapTest(manager);
         modifyLiqRouter = new PoolModifyLiquidityTest(manager);
 
-        // 3. Deploy mock tokens
         usdc = new MockERC20("USD Coin", "USDC", USDC_DECIMALS);
         wbtc = new MockERC20("Wrapped Bitcoin", "WBTC", 8);
         weth = new MockERC20("Wrapped Ether", "WETH", 18);
 
-        // 4. Mint tokens for testing
         usdc.mint(address(this), type(uint128).max);
         usdc.mint(alice, 100_000e6);
         wbtc.mint(address(this), type(uint128).max);
         weth.mint(address(this), type(uint128).max);
 
-        // 5. Deploy hook at a flagged address using deployCodeTo
         address hookAddr = address(HOOK_FLAGS);
         deployCodeTo(
             "BundlHook.sol:BundlHook",
@@ -92,19 +81,12 @@ contract BundlHookTest is Test {
         );
         hook = BundlHook(hookAddr);
 
-        // 6. Deploy index token with hook as minter
         indexToken = new BundlToken("Bundl BTC-ETH", "bBTC-ETH", address(hook));
 
-        // 7. Setup underlying pools (WBTC/USDC and WETH/USDC)
         _setupUnderlyingPools();
-
-        // 8. Initialize the hook
         _initializeHook();
-
-        // 9. Initialize the index pool (IndexToken/USDC)
         _initializeIndexPool();
 
-        // 10. Approve routers
         usdc.approve(address(swapRouter), type(uint256).max);
         IERC20Minimal(address(indexToken)).approve(address(swapRouter), type(uint256).max);
     }
@@ -152,7 +134,6 @@ contract BundlHookTest is Test {
     }
 
     function test_invalidWeightsRevert() public {
-        // Deploy a fresh hook to test initialize validation
         address hookAddr2 = address(uint160(HOOK_FLAGS) + 1000);
         deployCodeTo(
             "BundlHook.sol:BundlHook",
@@ -170,7 +151,7 @@ contract BundlHookTest is Test {
 
         tokens[0] = address(wbtc); tokens[1] = address(weth);
         amounts[0] = 1; amounts[1] = 1;
-        weights[0] = 3000; weights[1] = 3000; // sum = 6000 != 10000
+        weights[0] = 3000; weights[1] = 3000; // sum = 6000, invalid
         poolKeys[0] = wbtcUsdcPoolKey; poolKeys[1] = wethUsdcPoolKey;
         decimals[0] = 8; decimals[1] = 18;
 
@@ -272,7 +253,6 @@ contract BundlHookTest is Test {
         uint256 usdcAmount = 3e18;
 
         usdc.mint(alice, usdcAmount);
-
         vm.prank(alice);
         usdc.approve(address(swapRouter), usdcAmount);
 
@@ -303,7 +283,6 @@ contract BundlHookTest is Test {
         indexToken.approve(address(swapRouter), indexBalance);
 
         bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
-
         uint256 usdcBefore = usdc.balanceOf(alice);
 
         vm.prank(alice);
@@ -330,7 +309,6 @@ contract BundlHookTest is Test {
         usdc.approve(address(swapRouter), usdcAmount);
 
         bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
-
         bytes memory hookData = abi.encode(uint256(9999999999e18));
 
         vm.prank(alice);
@@ -359,54 +337,38 @@ contract BundlHookTest is Test {
         (Currency c0, Currency c1) = _sortCurrencies(address(wbtc), address(usdc));
         wbtcUsdcPoolKey = PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: IHooks(address(0))});
         manager.initialize(wbtcUsdcPoolKey, SQRT_PRICE_1_1);
-
         modifyLiqRouter.modifyLiquidity(
             wbtcUsdcPoolKey,
-            IPoolManager.ModifyLiquidityParams({
-                tickLower: -887220,
-                tickUpper: 887220,
-                liquidityDelta: 100_000_000e18,
-                salt: bytes32(0)
-            }),
+            IPoolManager.ModifyLiquidityParams({tickLower: -887220, tickUpper: 887220, liquidityDelta: 100_000_000e18, salt: bytes32(0)}),
             ""
         );
 
         (c0, c1) = _sortCurrencies(address(weth), address(usdc));
         wethUsdcPoolKey = PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: IHooks(address(0))});
         manager.initialize(wethUsdcPoolKey, SQRT_PRICE_1_1);
-
         modifyLiqRouter.modifyLiquidity(
             wethUsdcPoolKey,
-            IPoolManager.ModifyLiquidityParams({
-                tickLower: -887220,
-                tickUpper: 887220,
-                liquidityDelta: 100_000_000e18,
-                salt: bytes32(0)
-            }),
+            IPoolManager.ModifyLiquidityParams({tickLower: -887220, tickUpper: 887220, liquidityDelta: 100_000_000e18, salt: bytes32(0)}),
             ""
         );
     }
 
     function _initializeHook() internal {
-        address[] memory tokens = new address[](2);
-        uint256[] memory amounts = new uint256[](2);
-        uint256[] memory weights = new uint256[](2);
+        address[] memory tokens   = new address[](2);
+        uint256[] memory amounts  = new uint256[](2);
+        uint256[] memory weights  = new uint256[](2);
         PoolKey[] memory poolKeys = new PoolKey[](2);
-        bool[] memory usdcIs0 = new bool[](2);
-        uint8[] memory decimals = new uint8[](2);
+        bool[]    memory usdcIs0  = new bool[](2);
+        uint8[]   memory decimals = new uint8[](2);
 
-        tokens[0] = address(wbtc);
-        amounts[0] = 0.001e8;   // 0.001 WBTC per index unit
-        weights[0] = 5000;       // 50%
+        tokens[0]   = address(wbtc); amounts[0] = 0.001e8;  weights[0] = 5000;
         poolKeys[0] = wbtcUsdcPoolKey;
-        usdcIs0[0] = Currency.unwrap(wbtcUsdcPoolKey.currency0) == address(usdc);
+        usdcIs0[0]  = Currency.unwrap(wbtcUsdcPoolKey.currency0) == address(usdc);
         decimals[0] = 8;
 
-        tokens[1] = address(weth);
-        amounts[1] = 0.5e18;    // 0.5 WETH per index unit
-        weights[1] = 5000;       // 50%
+        tokens[1]   = address(weth); amounts[1] = 0.5e18;   weights[1] = 5000;
         poolKeys[1] = wethUsdcPoolKey;
-        usdcIs0[1] = Currency.unwrap(wethUsdcPoolKey.currency0) == address(usdc);
+        usdcIs0[1]  = Currency.unwrap(wethUsdcPoolKey.currency0) == address(usdc);
         decimals[1] = 18;
 
         hook.initialize(address(indexToken), tokens, amounts, weights, poolKeys, usdcIs0, decimals);
