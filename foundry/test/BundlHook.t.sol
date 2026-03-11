@@ -50,10 +50,16 @@ contract BundlHookTest is Test {
     uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
     uint8   constant USDC_DECIMALS  = 6;
 
+    // Hook required flags
     uint160 constant HOOK_FLAGS = uint160(
         Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
             | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
     );
+
+    // A second valid hook address for isolation tests:
+    // We set a high bit (bit 20) that is outside ALL_HOOK_MASK (14 bits),
+    // so the flags check still passes but the address is different from hook.
+    uint160 constant HOOK_FLAGS_2 = HOOK_FLAGS | (1 << 20);
 
     // ═══════════════════════════════════════════════════════════════════════
     // SETUP
@@ -73,13 +79,13 @@ contract BundlHookTest is Test {
         wbtc.mint(address(this), type(uint128).max);
         weth.mint(address(this), type(uint128).max);
 
-        address hookAddr = address(HOOK_FLAGS);
+        // Deploy hook at flagged address
         deployCodeTo(
             "BundlHook.sol:BundlHook",
             abi.encode(manager, address(usdc), USDC_DECIMALS),
-            hookAddr
+            address(HOOK_FLAGS)
         );
-        hook = BundlHook(hookAddr);
+        hook = BundlHook(address(HOOK_FLAGS));
 
         indexToken = new BundlToken("Bundl BTC-ETH", "bBTC-ETH", address(hook));
 
@@ -134,26 +140,26 @@ contract BundlHookTest is Test {
     }
 
     function test_invalidWeightsRevert() public {
-        address hookAddr2 = address(uint160(HOOK_FLAGS) + 1000);
+        // Deploy a second hook at HOOK_FLAGS_2 (same permission bits, different address)
         deployCodeTo(
             "BundlHook.sol:BundlHook",
             abi.encode(manager, address(usdc), USDC_DECIMALS),
-            hookAddr2
+            address(HOOK_FLAGS_2)
         );
-        BundlHook hook2 = BundlHook(hookAddr2);
+        BundlHook hook2 = BundlHook(address(HOOK_FLAGS_2));
 
-        address[] memory tokens = new address[](2);
-        uint256[] memory amounts = new uint256[](2);
-        uint256[] memory weights = new uint256[](2);
+        address[] memory tokens   = new address[](2);
+        uint256[] memory amounts  = new uint256[](2);
+        uint256[] memory weights  = new uint256[](2);
         PoolKey[] memory poolKeys = new PoolKey[](2);
-        bool[] memory usdcIs0 = new bool[](2);
-        uint8[] memory decimals = new uint8[](2);
+        bool[]    memory usdcIs0  = new bool[](2);
+        uint8[]   memory decimals = new uint8[](2);
 
-        tokens[0] = address(wbtc); tokens[1] = address(weth);
-        amounts[0] = 1; amounts[1] = 1;
-        weights[0] = 3000; weights[1] = 3000; // sum = 6000, invalid
+        tokens[0] = address(wbtc);  tokens[1] = address(weth);
+        amounts[0] = 1;             amounts[1] = 1;
+        weights[0] = 3000;          weights[1] = 3000; // sum = 6000 != 10000
         poolKeys[0] = wbtcUsdcPoolKey; poolKeys[1] = wethUsdcPoolKey;
-        decimals[0] = 8; decimals[1] = 18;
+        decimals[0] = 8;            decimals[1] = 18;
 
         vm.expectRevert(BundlHook.InvalidWeights.selector);
         hook2.initialize(address(indexToken), tokens, amounts, weights, poolKeys, usdcIs0, decimals);
@@ -250,6 +256,9 @@ contract BundlHookTest is Test {
     // ═══════════════════════════════════════════════════════════════════════
 
     function test_buyExactUsdcForIndex() public {
+        // With pools at 1:1 price, amountsPerUnit = 1 wei each, and 50/50 weights:
+        // 3e18 USDC total -> 1.5e18 per token -> receives ~1.5e18 wei of each underlying
+        // units = min(1.5e18 / 1, 1.5e18 / 1) = 1.5e18 >> 1, so mints >= 1 index token
         uint256 usdcAmount = 3e18;
 
         usdc.mint(alice, usdcAmount);
@@ -361,12 +370,18 @@ contract BundlHookTest is Test {
         bool[]    memory usdcIs0  = new bool[](2);
         uint8[]   memory decimals = new uint8[](2);
 
-        tokens[0]   = address(wbtc); amounts[0] = 0.001e8;  weights[0] = 5000;
+        // amountsPerUnit = 1 wei each.
+        // With pools at 1:1 and 50/50 weight split:
+        //   usdcForToken = totalUsdc * 5000 / 10000
+        //   underlyingReceived ~ usdcForToken (minus tiny fee)
+        //   units = underlyingReceived / 1 = underlyingReceived
+        // So even a small USDC amount mints many units.
+        tokens[0]   = address(wbtc); amounts[0] = 1; weights[0] = 5000;
         poolKeys[0] = wbtcUsdcPoolKey;
         usdcIs0[0]  = Currency.unwrap(wbtcUsdcPoolKey.currency0) == address(usdc);
         decimals[0] = 8;
 
-        tokens[1]   = address(weth); amounts[1] = 0.5e18;   weights[1] = 5000;
+        tokens[1]   = address(weth); amounts[1] = 1; weights[1] = 5000;
         poolKeys[1] = wethUsdcPoolKey;
         usdcIs0[1]  = Currency.unwrap(wethUsdcPoolKey.currency0) == address(usdc);
         decimals[1] = 18;
