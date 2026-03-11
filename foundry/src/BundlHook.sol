@@ -398,7 +398,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
         int128 deltaUnspecified = isExactInput
             ? -int128(uint128(indexTokensToMint))  // hook provides index tokens
-            : -int128(uint128(usdcAmount));         // hook consumes USDC from PM
+            : int128(uint128(usdcAmount));         // hook gets USDC from PM
 
         BeforeSwapDelta hookDelta =
             toBeforeSwapDelta(int128(-params.amountSpecified), deltaUnspecified);
@@ -448,15 +448,13 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             if (actualUsdcReceived < usdcReceived) revert TooLittleReceived();
         }
 
-        poolManager.sync(Currency.wrap(usdc));
-        IERC20(usdc).transfer(address(poolManager), usdcReceived);
-        poolManager.settle();
+        // Let PM keep the Hook's positive USDC delta to offset hookDelta
 
         emit Sold(msg.sender, units, usdcReceived);
 
         int128 deltaUnspecified = isExactInput
             ? -int128(uint128(usdcReceived))
-            : -int128(uint128(indexTokensToBurn));
+            : int128(uint128(indexTokensToBurn));
 
         BeforeSwapDelta hookDelta =
             toBeforeSwapDelta(int128(-params.amountSpecified), deltaUnspecified);
@@ -563,10 +561,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         int128 outputAmount = zeroForOne ? delta.amount1() : delta.amount0();
         underlyingReceived = uint256(uint128(outputAmount > 0 ? outputAmount : -outputAmount));
 
-        poolManager.sync(Currency.wrap(usdc));
-        IERC20(usdc).transfer(address(poolManager), usdcAmount);
-        poolManager.settle();
-
+        // Let the PM keep the hook's negative USDC delta
         poolManager.take(Currency.wrap(underlyingTokens[tokenIndex]), address(this), underlyingReceived);
     }
 
@@ -590,10 +585,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         int128 inputAmount = zeroForOne ? delta.amount0() : delta.amount1();
         usdcSpent = uint256(uint128(inputAmount < 0 ? -inputAmount : inputAmount));
 
-        poolManager.sync(Currency.wrap(usdc));
-        IERC20(usdc).transfer(address(poolManager), usdcSpent);
-        poolManager.settle();
-
+        // Let the PM keep the hook's negative USDC delta
         poolManager.take(Currency.wrap(underlyingTokens[tokenIndex]), address(this), underlyingAmount);
     }
 
@@ -618,10 +610,10 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         usdcReceived = uint256(uint128(outputAmount > 0 ? outputAmount : -outputAmount));
 
         poolManager.sync(Currency.wrap(underlyingTokens[tokenIndex]));
-        IERC20(underlyingTokens[tokenIndex]).transfer(address(poolManager), underlyingAmount);
+        IERC20(underlyingTokens[tokenIndex]).safeTransfer(address(poolManager), underlyingAmount);
         poolManager.settle();
 
-        poolManager.take(Currency.wrap(usdc), address(this), usdcReceived);
+        // Let the PM keep the hook's positive USDC delta
     }
 
     // ═══════════════════════════════════════════════════════════════════════

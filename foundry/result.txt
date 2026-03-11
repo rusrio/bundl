@@ -1,0 +1,32 @@
+Compiling 3 files with Solc 0.8.26
+Solc 0.8.26 finished in 53.61s
+Compiler run successful!
+
+Ran 14 tests for test/BundlHook.t.sol:BundlHookTest
+[PASS] test_buyExactUsdcForIndex() (gas: 396294)
+[PASS] test_cannotReinitialize() (gas: 17565)
+[PASS] test_getTotalBacking() (gas: 25407)
+[PASS] test_hookAddressHasCorrectFlags() (gas: 3577)
+[PASS] test_hookIsInitialized() (gas: 13770)
+[PASS] test_invalidWeightsRevert() (gas: 87974)
+[PASS] test_redeemGivesUnderlyingAssets() (gas: 176654)
+[PASS] test_revertDirectCallToBeforeSwap() (gas: 18729)
+[PASS] test_revertDirectLiquidityAddition() (gas: 51623)
+[PASS] test_revertRedeemInsufficientBacking() (gas: 67397)
+[PASS] test_revertRedeemZeroUnits() (gas: 19642)
+[PASS] test_sellExactIndexForUsdc() (gas: 595864)
+[PASS] test_slippageRevert() (gas: 320513)
+[PASS] test_underlyingConfig() (gas: 32046)
+Suite result: ok. 14 passed; 0 failed; 0 skipped; finished in 21.50ms (24.56ms CPU time)
+
+Ran 7 tests for test/BundlToken.t.sol:BundlTokenTest
+[PASS] testFuzz_mintArbitraryAmount(uint256) (runs: 256, μ: 61096, ~: 61096)
+[PASS] test_burnByMinter() (gas: 65284)
+[PASS] test_mintByMinter() (gas: 61068)
+[PASS] test_minterIsCorrect() (gas: 7958)
+[PASS] test_nameAndSymbol() (gas: 17105)
+[PASS] test_revertBurnByNonMinter() (gas: 61713)
+[PASS] test_revertMintByNonMinter() (gas: 11608)
+Suite result: ok. 7 passed; 0 failed; 0 skipped; finished in 41.48ms (45.70ms CPU time)
+
+Ran 2 test suites in 53.90ms (62.98ms CPU time): 21 tests passed, 0 failed, 0 skipped (21 total tests)
