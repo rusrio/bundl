@@ -37,6 +37,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     error NotInitialized();
     error AlreadyInitialized();
     error InvalidConfig();
+    error InvalidWeights();
     error PoolNotRegistered();
     error ZeroUnits();
     error InsufficientBacking();
@@ -58,6 +59,11 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     /// @notice Amount of each underlying token per 1 unit of index (scaled to token decimals)
     uint256[] public amountsPerUnit;
 
+    /// @notice Weight of each underlying token in basis points (sum must equal 10000)
+    /// @dev Used to split incoming USDC proportionally when buying underlying assets.
+    ///      E.g. [5000, 3000, 2000] = 50% / 30% / 20%.
+    uint256[] public underlyingWeightsBps;
+
     /// @notice PoolKeys for USDC/<underlying> pools used to swap
     PoolKey[] public underlyingPoolKeys;
 
@@ -76,6 +82,9 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
     /// @notice USDC decimals (typically 6)
     uint8 public immutable usdcDecimals;
+
+    /// @notice Basis points denominator
+    uint256 internal constant BPS = 10000;
 
     /// @notice Sqrt price constants for swap limits
     uint160 internal constant MIN_SQRT_PRICE = 4295128739;
@@ -131,27 +140,41 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Initialize the hook with the index token and underlying configuration
+    /// @param _weightsBps  Allocation of each underlying in basis points (must sum to 10000)
     function initialize(
         address _indexToken,
         address[] calldata _tokens,
         uint256[] calldata _amounts,
+        uint256[] calldata _weightsBps,
         PoolKey[] calldata _poolKeys,
         bool[] calldata _usdcIs0,
         uint8[] calldata _underlyingDecimals
     ) external {
         if (initialized) revert AlreadyInitialized();
         if (
-            _tokens.length == 0 || _tokens.length != _amounts.length || _tokens.length != _poolKeys.length
-                || _tokens.length != _usdcIs0.length || _tokens.length != _underlyingDecimals.length
+            _tokens.length == 0
+                || _tokens.length != _amounts.length
+                || _tokens.length != _weightsBps.length
+                || _tokens.length != _poolKeys.length
+                || _tokens.length != _usdcIs0.length
+                || _tokens.length != _underlyingDecimals.length
         ) {
             revert InvalidConfig();
         }
+
+        // Validate weights sum to exactly BPS
+        uint256 totalBps = 0;
+        for (uint256 i = 0; i < _weightsBps.length; i++) {
+            totalBps += _weightsBps[i];
+        }
+        if (totalBps != BPS) revert InvalidWeights();
 
         indexToken = BundlToken(_indexToken);
 
         for (uint256 i = 0; i < _tokens.length; i++) {
             underlyingTokens.push(_tokens[i]);
             amountsPerUnit.push(_amounts[i]);
+            underlyingWeightsBps.push(_weightsBps[i]);
             underlyingPoolKeys.push(_poolKeys[i]);
             usdcIsCurrency0.push(_usdcIs0[i]);
             underlyingDecimals.push(_underlyingDecimals[i]);
@@ -285,6 +308,10 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         return amountsPerUnit;
     }
 
+    function getUnderlyingWeightsBps() external view returns (uint256[] memory) {
+        return underlyingWeightsBps;
+    }
+
     function getUnderlyingPoolKeys() external view override returns (PoolKey[] memory) {
         return underlyingPoolKeys;
     }
@@ -347,17 +374,11 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         uint256 units;
 
         if (isExactInput) {
-            // Exact input: user spends `absAmount` USDC.
-            // _buyUnderlyingWithUsdc returns both units minted and actual USDC spent
-            // (may be less than absAmount due to truncation or slippage).
             usdcAmount = absAmount;
             uint256 actualUsdcSpent;
             (units, actualUsdcSpent) = _buyUnderlyingWithUsdc(usdcAmount);
-            // Refund surplus USDC to the user by reducing the reported USDC consumed.
-            // The delta tells PM how much USDC the hook actually took; surplus stays with user.
             usdcAmount = actualUsdcSpent;
         } else {
-            // Exact output: user wants `absAmount` of IndexToken.
             units = absAmount / 1e18;
             if (units == 0) revert ZeroUnits();
             usdcAmount = _buyUnderlyingForUnits(units);
@@ -375,20 +396,9 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
         emit Minted(msg.sender, units, usdcAmount);
 
-        // BeforeSwapDelta semantics for a NoOp buy:
-        //   specifiedDelta  = amount of the "specified" token the hook consumed/provided
-        //   unspecifiedDelta = amount of the "unspecified" token the hook consumed/provided
-        //
-        // Exact input (USDC specified, IndexToken unspecified):
-        //   specifiedDelta   = +usdcAmount     (hook consumed this much USDC from PM)
-        //   unspecifiedDelta = -indexTokensMinted (hook provided this many index tokens to PM)
-        //
-        // Exact output (IndexToken specified, USDC unspecified):
-        //   specifiedDelta   = +indexTokensMinted (hook provided the requested index tokens)
-        //   unspecifiedDelta = -usdcAmount       (hook consumed USDC from PM — negative = hook takes)
         int128 deltaUnspecified = isExactInput
             ? -int128(uint128(indexTokensToMint))  // hook provides index tokens
-            : -int128(uint128(usdcAmount));         // hook consumes USDC (fix: was positive before)
+            : -int128(uint128(usdcAmount));         // hook consumes USDC from PM
 
         BeforeSwapDelta hookDelta =
             toBeforeSwapDelta(int128(-params.amountSpecified), deltaUnspecified);
@@ -415,13 +425,10 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         uint256 usdcReceived;
 
         if (isExactInput) {
-            // User sells exact IndexToken amount
             units = absAmount / 1e18;
             if (units == 0) revert ZeroUnits();
         } else {
-            // Exact output: user wants exact USDC amount
             usdcReceived = absAmount;
-            // Estimate units needed
             units = _estimateUnitsForUsdc(usdcReceived);
             if (units == 0) revert ZeroUnits();
         }
@@ -429,14 +436,9 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         uint256 indexTokensToBurn = units * 1e18;
         if (!isExactInput && minOutput > 0 && indexTokensToBurn > minOutput) revert TooMuchRequested();
 
-        // Use ERC-6909 mint to handle IndexToken delta accounting.
-        // We can't use poolManager.take() here because PM has no IndexToken balance yet
-        // (the router settles tokens AFTER beforeSwap returns).
-        // mint() adjusts the delta without requiring actual ERC20 transfer.
         uint256 indexTokenCurrencyId = uint256(uint160(address(indexToken)));
         poolManager.mint(address(this), indexTokenCurrencyId, indexTokensToBurn);
 
-        // Sell underlying assets for USDC
         uint256 actualUsdcReceived = _sellUnderlyingForUsdc(units);
 
         if (isExactInput) {
@@ -446,18 +448,15 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             if (actualUsdcReceived < usdcReceived) revert TooLittleReceived();
         }
 
-        // Settle USDC to PoolManager (user receives them)
         poolManager.sync(Currency.wrap(usdc));
         IERC20(usdc).transfer(address(poolManager), usdcReceived);
         poolManager.settle();
 
         emit Sold(msg.sender, units, usdcReceived);
 
-        // deltaUnspecified: NEGATIVE because the hook PROVIDES USDC to the swap
-        // (the hook settled USDC to PM, and this delta tells PM the hook is providing it)
         int128 deltaUnspecified = isExactInput
-            ? -int128(uint128(usdcReceived))        // Exact input: hook provides USDC
-            : -int128(uint128(indexTokensToBurn));   // Exact output: hook provides index tokens
+            ? -int128(uint128(usdcReceived))
+            : -int128(uint128(indexTokensToBurn));
 
         BeforeSwapDelta hookDelta =
             toBeforeSwapDelta(int128(-params.amountSpecified), deltaUnspecified);
@@ -469,37 +468,26 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // INTERNAL: UNDERLYING SWAP HELPERS
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Buy underlying tokens with a given amount of USDC.
-    /// @dev Splits USDC equally across all underlying tokens and swaps each.
-    ///      Returns both the number of complete index units achievable and the
-    ///      total USDC actually spent (which may be less than totalUsdc due to
-    ///      integer truncation or slippage). The caller uses actualUsdcSpent to
-    ///      correctly report the BeforeSwapDelta, so surplus USDC is returned to the user.
-    /// @return units          Number of complete index units purchased
+    /// @notice Buy underlying tokens with a given amount of USDC, split by configured weights.
+    /// @dev Allocates totalUsdc * weightsBps[i] / BPS to each token.
+    ///      Returns actual USDC spent (may be < totalUsdc due to bps rounding).
+    /// @return units           Number of complete index units purchased
     /// @return actualUsdcSpent Total USDC consumed across all underlying swaps
     function _buyUnderlyingWithUsdc(uint256 totalUsdc)
         internal
         returns (uint256 units, uint256 actualUsdcSpent)
     {
         uint256 numTokens = underlyingTokens.length;
-        // Integer division: any remainder USDC is implicitly refunded via the delta
-        uint256 usdcPerToken = totalUsdc / numTokens;
-
         uint256[] memory underlyingReceived = new uint256[](numTokens);
 
-        // Execute all swaps and accumulate actual USDC spent
         for (uint256 i = 0; i < numTokens; i++) {
-            uint256 usdcBefore = IERC20(usdc).balanceOf(address(this));
-            underlyingReceived[i] = _swapExactUsdcForUnderlying(i, usdcPerToken);
-            uint256 usdcAfter = IERC20(usdc).balanceOf(address(this));
-            // usdcPerToken was already transferred to PM inside _swapExactUsdcForUnderlying,
-            // so actual spent = usdcPerToken (full amount passed in, no partial fills in v4)
-            actualUsdcSpent += usdcPerToken;
-            // Suppress unused variable warning
-            (usdcBefore, usdcAfter);
+            // Allocate USDC proportionally by weight
+            uint256 usdcForToken = totalUsdc * underlyingWeightsBps[i] / BPS;
+            underlyingReceived[i] = _swapExactUsdcForUnderlying(i, usdcForToken);
+            actualUsdcSpent += usdcForToken;
         }
 
-        // Find the minimum complete units across all tokens
+        // Find the minimum complete units achievable across all tokens
         units = type(uint256).max;
         for (uint256 i = 0; i < numTokens; i++) {
             uint256 unitsFromThis = underlyingReceived[i] / amountsPerUnit[i];
@@ -547,7 +535,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         }
 
         if (navPerUnit == 0) return 1;
-        units = (targetUsdc + navPerUnit - 1) / navPerUnit; // Round up
+        units = (targetUsdc + navPerUnit - 1) / navPerUnit;
         if (units == 0) units = 1;
     }
 
@@ -555,9 +543,6 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // INTERNAL: ATOMIC SWAP EXECUTION ON UNDERLYING POOLS
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Swap exact USDC input for underlying token.
-    /// @dev After the swap, the hook owes USDC to PoolManager (negative delta on USDC).
-    ///      We must settle that debt immediately via sync/transfer/settle before returning.
     function _swapExactUsdcForUnderlying(uint256 tokenIndex, uint256 usdcAmount)
         internal
         returns (uint256 underlyingReceived)
@@ -565,7 +550,6 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         PoolKey memory poolKey = underlyingPoolKeys[tokenIndex];
         bool zeroForOne = usdcIsCurrency0[tokenIndex];
 
-        // Execute swap: exact input
         BalanceDelta delta = poolManager.swap(
             poolKey,
             IPoolManager.SwapParams({
@@ -576,22 +560,16 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             ""
         );
 
-        // Extract the underlying amount received
         int128 outputAmount = zeroForOne ? delta.amount1() : delta.amount0();
         underlyingReceived = uint256(uint128(outputAmount > 0 ? outputAmount : -outputAmount));
 
-        // Settle USDC owed to PoolManager (hook is paying for the swap)
         poolManager.sync(Currency.wrap(usdc));
         IERC20(usdc).transfer(address(poolManager), usdcAmount);
         poolManager.settle();
 
-        // Take the underlying tokens from PoolManager into this contract
         poolManager.take(Currency.wrap(underlyingTokens[tokenIndex]), address(this), underlyingReceived);
     }
 
-    /// @notice Swap USDC for exact underlying token output.
-    /// @dev After the swap, the hook owes USDC to PoolManager (negative delta on USDC).
-    ///      We must settle that debt immediately via sync/transfer/settle before returning.
     function _swapUsdcForExactUnderlying(uint256 tokenIndex, uint256 underlyingAmount)
         internal
         returns (uint256 usdcSpent)
@@ -599,7 +577,6 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         PoolKey memory poolKey = underlyingPoolKeys[tokenIndex];
         bool zeroForOne = usdcIsCurrency0[tokenIndex];
 
-        // Execute swap: exact output
         BalanceDelta delta = poolManager.swap(
             poolKey,
             IPoolManager.SwapParams({
@@ -610,29 +587,23 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             ""
         );
 
-        // Calculate actual USDC owed (may differ slightly from estimate due to price impact)
         int128 inputAmount = zeroForOne ? delta.amount0() : delta.amount1();
         usdcSpent = uint256(uint128(inputAmount < 0 ? -inputAmount : inputAmount));
 
-        // Settle USDC owed to PoolManager
         poolManager.sync(Currency.wrap(usdc));
         IERC20(usdc).transfer(address(poolManager), usdcSpent);
         poolManager.settle();
 
-        // Take the underlying tokens from PoolManager into this contract
         poolManager.take(Currency.wrap(underlyingTokens[tokenIndex]), address(this), underlyingAmount);
     }
 
-    /// @notice Swap exact underlying token input for USDC
     function _swapExactUnderlyingForUsdc(uint256 tokenIndex, uint256 underlyingAmount)
         internal
         returns (uint256 usdcReceived)
     {
         PoolKey memory poolKey = underlyingPoolKeys[tokenIndex];
-        // If USDC is currency0, underlying is currency1 → swap 1→0 (zeroForOne = false)
         bool zeroForOne = !usdcIsCurrency0[tokenIndex];
 
-        // Execute swap: exact input
         BalanceDelta delta = poolManager.swap(
             poolKey,
             IPoolManager.SwapParams({
@@ -643,16 +614,13 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             ""
         );
 
-        // Extract USDC received
         int128 outputAmount = zeroForOne ? delta.amount1() : delta.amount0();
         usdcReceived = uint256(uint128(outputAmount > 0 ? outputAmount : -outputAmount));
 
-        // Settle underlying tokens we owe to PoolManager
         poolManager.sync(Currency.wrap(underlyingTokens[tokenIndex]));
         IERC20(underlyingTokens[tokenIndex]).transfer(address(poolManager), underlyingAmount);
         poolManager.settle();
 
-        // Take USDC received from PoolManager
         poolManager.take(Currency.wrap(usdc), address(this), usdcReceived);
     }
 
@@ -660,11 +628,6 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // INTERNAL: PRICE HELPERS
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Get the USDC value of a specific underlying amount using the pool's sqrt price.
-    /// @dev Normalizes the decimal difference between the underlying token and USDC so that
-    ///      the returned value is always expressed in USDC units (usdcDecimals).
-    ///      sqrtPriceX96 encodes the raw token ratio without decimal adjustment, so we must
-    ///      scale the result by 10^(underlyingDecimals - usdcDecimals) or its inverse.
     function _getUsdcValueOfUnderlying(
         uint160 sqrtPriceX96,
         bool usdcIs0,
@@ -675,22 +638,13 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         uint256 rawValue;
 
         if (usdcIs0) {
-            // USDC is token0, underlying is token1
-            // price (token0 per token1) = 2^192 / sqrtPrice^2
-            // usdcValue = underlyingAmount * 2^192 / sqrtPrice^2
             uint256 intermediate = FullMath.mulDiv(underlyingAmount, 1 << 96, sqrtPrice);
             rawValue = FullMath.mulDiv(intermediate, 1 << 96, sqrtPrice);
         } else {
-            // USDC is token1, underlying is token0
-            // price (token1 per token0) = sqrtPrice^2 / 2^192
-            // usdcValue = underlyingAmount * sqrtPrice^2 / 2^192
             uint256 intermediate = FullMath.mulDiv(underlyingAmount, sqrtPrice, 1 << 96);
             rawValue = FullMath.mulDiv(intermediate, sqrtPrice, 1 << 96);
         }
 
-        // Normalize decimal difference so result is in usdcDecimals units.
-        // sqrtPriceX96 reflects raw token amounts, so if tokenDecimals != usdcDecimals
-        // the rawValue is off by 10^(tokenDecimals - usdcDecimals).
         if (tokenDecimals > usdcDecimals) {
             usdcValue = rawValue / (10 ** (tokenDecimals - usdcDecimals));
         } else if (usdcDecimals > tokenDecimals) {

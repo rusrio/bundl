@@ -26,7 +26,8 @@ contract BundlFactory {
         address indexed token,
         PoolId poolId,
         address[] underlyingTokens,
-        uint256[] amountsPerUnit
+        uint256[] amountsPerUnit,
+        uint256[] weightsBps
     );
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -66,6 +67,7 @@ contract BundlFactory {
     /// @param symbol               Token symbol (e.g. "bBTC-ETH")
     /// @param underlyingTokens     Addresses of underlying tokens [WBTC, WETH, ...]
     /// @param amountsPerUnit       Amount of each underlying per 1 index unit
+    /// @param weightsBps           Weight of each underlying in basis points (must sum to 10000)
     /// @param underlyingPools      PoolKeys for USDC/<token> pools
     /// @param usdcIs0              Whether USDC is currency0 in each underlying pool
     /// @param tokenDecimals        Decimals of each underlying token (e.g. [8, 18] for WBTC/WETH)
@@ -78,6 +80,7 @@ contract BundlFactory {
         string calldata symbol,
         address[] calldata underlyingTokens,
         uint256[] calldata amountsPerUnit,
+        uint256[] calldata weightsBps,
         PoolKey[] calldata underlyingPools,
         bool[] calldata usdcIs0,
         uint8[] calldata tokenDecimals,
@@ -106,13 +109,13 @@ contract BundlFactory {
             address(indexToken),
             underlyingTokens,
             amountsPerUnit,
+            weightsBps,
             underlyingPools,
             usdcIs0,
             tokenDecimals
         );
 
         // 4. Create and initialize the IndexToken/USDC pool
-        // Sort currencies (v4 requires currency0 < currency1)
         Currency currency0;
         Currency currency1;
         if (address(indexToken) < usdc) {
@@ -126,7 +129,7 @@ contract BundlFactory {
         PoolKey memory poolKey = PoolKey({
             currency0: currency0,
             currency1: currency1,
-            fee: 3000, // 0.3% fee tier
+            fee: 3000,
             tickSpacing: 60,
             hooks: IHooks(hookAddr)
         });
@@ -137,17 +140,13 @@ contract BundlFactory {
         token = address(indexToken);
         poolId = poolKey.toId();
 
-        emit BundlCreated(hook, token, poolId, underlyingTokens, amountsPerUnit);
+        emit BundlCreated(hook, token, poolId, underlyingTokens, amountsPerUnit, weightsBps);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // INTERNAL: SALT MINING
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Mine a CREATE2 salt that produces an address with the required hook flag bits
-    /// @param creationCode The contract creation code + constructor args
-    /// @param flags        The required flag bits in the address
-    /// @return salt        The first valid salt found
     function _mineSalt(bytes memory creationCode, uint160 flags) internal view returns (bytes32 salt) {
         bytes32 initCodeHash = keccak256(creationCode);
 
@@ -155,7 +154,6 @@ contract BundlFactory {
             salt = bytes32(i);
             address predicted = _computeCreate2Address(salt, initCodeHash);
 
-            // Check that the address has ALL required flags set and NO unwanted flags
             uint160 addressFlags = uint160(predicted) & Hooks.ALL_HOOK_MASK;
             if (addressFlags == flags) {
                 return salt;
@@ -165,7 +163,6 @@ contract BundlFactory {
         revert SaltMiningFailed();
     }
 
-    /// @notice Compute CREATE2 address
     function _computeCreate2Address(bytes32 salt, bytes32 initCodeHash) internal view returns (address) {
         return address(
             uint160(
