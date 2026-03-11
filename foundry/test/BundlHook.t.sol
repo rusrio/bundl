@@ -14,6 +14,7 @@ import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {PoolSwapTest} from "v4-core/src/test/PoolSwapTest.sol";
 import {PoolModifyLiquidityTest} from "v4-core/src/test/PoolModifyLiquidityTest.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
+import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 
 import {BundlHook} from "../src/BundlHook.sol";
 import {BundlToken} from "../src/BundlToken.sol";
@@ -240,6 +241,93 @@ contract BundlHookTest is Test {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // TESTS: Swaps (Buy / Sell)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function test_buyExactUsdcForIndex() public {
+        uint256 usdcAmount = 3e18; // 3e18 USDC wei
+
+        // Give alice USDC
+        usdc.mint(alice, usdcAmount);
+
+        // Approve router
+        vm.prank(alice);
+        usdc.approve(address(swapRouter), usdcAmount);
+
+        bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
+        
+        vm.prank(alice);
+        swapRouter.swap(
+            indexPoolKey,
+            IPoolManager.SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: -int256(usdcAmount),
+                sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+
+        assertTrue(indexToken.balanceOf(alice) > 0, "Alice did not receive IndexToken");
+    }
+
+    function test_sellExactIndexForUsdc() public {
+        // First BUY to get index tokens
+        test_buyExactUsdcForIndex();
+        
+        uint256 indexBalance = indexToken.balanceOf(alice);
+        assertTrue(indexBalance > 0);
+
+        vm.prank(alice);
+        indexToken.approve(address(swapRouter), indexBalance);
+
+        bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
+
+        uint256 usdcBefore = usdc.balanceOf(alice);
+
+        vm.prank(alice);
+        swapRouter.swap(
+            indexPoolKey,
+            IPoolManager.SwapParams({
+                zeroForOne: !zeroForOne, // Reverse direction
+                amountSpecified: -int256(indexBalance),
+                sqrtPriceLimitX96: !zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+
+        assertTrue(usdc.balanceOf(alice) > usdcBefore, "Alice did not receive USDC");
+        assertEq(indexToken.balanceOf(alice), 0, "Alice should have sold all IndexToken");
+    }
+
+    function test_slippageRevert() public {
+        uint256 usdcAmount = 3e18;
+        
+        usdc.mint(alice, usdcAmount);
+        vm.prank(alice);
+        usdc.approve(address(swapRouter), usdcAmount);
+
+        bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
+        
+        // Ask for impossibly high minOutput via hookData
+        bytes memory hookData = abi.encode(uint256(9999999999e18));
+
+        vm.prank(alice);
+        vm.expectRevert(); // PM wraps hook errors in WrappedError
+        swapRouter.swap(
+            indexPoolKey,
+            IPoolManager.SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: -int256(usdcAmount),
+                sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+            }),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            hookData
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // INTERNAL: SETUP HELPERS
     // ═══════════════════════════════════════════════════════════════════════
 
@@ -260,7 +348,7 @@ contract BundlHookTest is Test {
             IPoolManager.ModifyLiquidityParams({
                 tickLower: -887220,
                 tickUpper: 887220,
-                liquidityDelta: 1e8,
+                liquidityDelta: 100_000_000e18,
                 salt: bytes32(0)
             }),
             ""
@@ -277,7 +365,7 @@ contract BundlHookTest is Test {
             IPoolManager.ModifyLiquidityParams({
                 tickLower: -887220,
                 tickUpper: 887220,
-                liquidityDelta: 1e8,
+                liquidityDelta: 100_000_000e18,
                 salt: bytes32(0)
             }),
             ""

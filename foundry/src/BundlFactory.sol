@@ -146,7 +146,7 @@ contract BundlFactory {
     function _mineSalt(bytes memory creationCode, uint160 flags) internal view returns (bytes32 salt) {
         bytes32 initCodeHash = keccak256(creationCode);
 
-        for (uint256 i = 0; i < 10000; i++) {
+        for (uint256 i = 0; i < 200000; i++) {
             salt = bytes32(i);
             address predicted = _computeCreate2Address(salt, initCodeHash);
 

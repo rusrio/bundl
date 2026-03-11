@@ -1,0 +1,11 @@
+{
+  "bundlFactoryAddress": "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318",
+  "bundlHookAddress": "0x2cD45afE6261674d4C952ecd51F6595942Bd9888",
+  "bundlTokenAddress": "0xe082b26cEf079a095147F35c9647eC97c2401B83",
+  "modifyLiquidityRouterAddress": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+  "poolManagerAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+  "swapRouterAddress": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+  "usdcAddress": "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
+  "wbtcAddress": "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
+  "wethAddress": "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707"
+}
