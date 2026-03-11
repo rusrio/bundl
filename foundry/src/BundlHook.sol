@@ -524,7 +524,9 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // INTERNAL: ATOMIC SWAP EXECUTION ON UNDERLYING POOLS
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Swap exact USDC input for underlying token
+    /// @notice Swap exact USDC input for underlying token.
+    /// @dev After the swap, the hook owes USDC to PoolManager (negative delta on USDC).
+    ///      We must settle that debt immediately via sync/transfer/settle before returning.
     function _swapExactUsdcForUnderlying(uint256 tokenIndex, uint256 usdcAmount)
         internal
         returns (uint256 underlyingReceived)
@@ -547,11 +549,18 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         int128 outputAmount = zeroForOne ? delta.amount1() : delta.amount0();
         underlyingReceived = uint256(uint128(outputAmount > 0 ? outputAmount : -outputAmount));
 
-        // Take the underlying tokens from PoolManager
+        // Settle USDC owed to PoolManager (hook is paying for the swap)
+        poolManager.sync(Currency.wrap(usdc));
+        IERC20(usdc).transfer(address(poolManager), usdcAmount);
+        poolManager.settle();
+
+        // Take the underlying tokens from PoolManager into this contract
         poolManager.take(Currency.wrap(underlyingTokens[tokenIndex]), address(this), underlyingReceived);
     }
 
-    /// @notice Swap USDC for exact underlying token output
+    /// @notice Swap USDC for exact underlying token output.
+    /// @dev After the swap, the hook owes USDC to PoolManager (negative delta on USDC).
+    ///      We must settle that debt immediately via sync/transfer/settle before returning.
     function _swapUsdcForExactUnderlying(uint256 tokenIndex, uint256 underlyingAmount)
         internal
         returns (uint256 usdcSpent)
@@ -570,11 +579,16 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             ""
         );
 
-        // Calculate USDC owed
+        // Calculate actual USDC owed (may differ slightly from estimate due to price impact)
         int128 inputAmount = zeroForOne ? delta.amount0() : delta.amount1();
         usdcSpent = uint256(uint128(inputAmount < 0 ? -inputAmount : inputAmount));
 
-        // Take the underlying tokens
+        // Settle USDC owed to PoolManager
+        poolManager.sync(Currency.wrap(usdc));
+        IERC20(usdc).transfer(address(poolManager), usdcSpent);
+        poolManager.settle();
+
+        // Take the underlying tokens from PoolManager into this contract
         poolManager.take(Currency.wrap(underlyingTokens[tokenIndex]), address(this), underlyingAmount);
     }
 
