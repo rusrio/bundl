@@ -64,12 +64,18 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     /// @notice Whether USDC is currency0 in each underlying pool
     bool[] public usdcIsCurrency0;
 
+    /// @notice Decimals for each underlying token (e.g. 18 for WETH, 8 for WBTC)
+    uint8[] public underlyingDecimals;
+
     /// @notice The registered IndexToken/USDC pool
     PoolId public registeredPoolId;
     bool public initialized;
 
     /// @notice USDC token address
     address public immutable usdc;
+
+    /// @notice USDC decimals (typically 6)
+    uint8 public immutable usdcDecimals;
 
     /// @notice Sqrt price constants for swap limits
     uint160 internal constant MIN_SQRT_PRICE = 4295128739;
@@ -93,9 +99,10 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // CONSTRUCTOR
     // ═══════════════════════════════════════════════════════════════════════
 
-    constructor(IPoolManager _poolManager, address _usdc) {
+    constructor(IPoolManager _poolManager, address _usdc, uint8 _usdcDecimals) {
         poolManager = _poolManager;
         usdc = _usdc;
+        usdcDecimals = _usdcDecimals;
 
         // Validate hook address has the correct permission flags
         Hooks.validateHookPermissions(
@@ -129,12 +136,13 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         address[] calldata _tokens,
         uint256[] calldata _amounts,
         PoolKey[] calldata _poolKeys,
-        bool[] calldata _usdcIs0
+        bool[] calldata _usdcIs0,
+        uint8[] calldata _underlyingDecimals
     ) external {
         if (initialized) revert AlreadyInitialized();
         if (
             _tokens.length == 0 || _tokens.length != _amounts.length || _tokens.length != _poolKeys.length
-                || _tokens.length != _usdcIs0.length
+                || _tokens.length != _usdcIs0.length || _tokens.length != _underlyingDecimals.length
         ) {
             revert InvalidConfig();
         }
@@ -146,6 +154,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             amountsPerUnit.push(_amounts[i]);
             underlyingPoolKeys.push(_poolKeys[i]);
             usdcIsCurrency0.push(_usdcIs0[i]);
+            underlyingDecimals.push(_underlyingDecimals[i]);
         }
 
         initialized = true;
@@ -305,11 +314,16 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         }
     }
 
-    /// @notice Calculate NAV per index unit in USDC (6 decimals)
+    /// @notice Calculate NAV per index unit in USDC (usdcDecimals)
     function getNavPerUnit() external view returns (uint256 navPerUnit) {
         for (uint256 i = 0; i < underlyingTokens.length; i++) {
             (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(underlyingPoolKeys[i].toId());
-            uint256 usdcValue = _getUsdcValueOfUnderlying(sqrtPriceX96, usdcIsCurrency0[i], amountsPerUnit[i]);
+            uint256 usdcValue = _getUsdcValueOfUnderlying(
+                sqrtPriceX96,
+                usdcIsCurrency0[i],
+                amountsPerUnit[i],
+                underlyingDecimals[i]
+            );
             navPerUnit += usdcValue;
         }
     }
@@ -345,7 +359,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
             // Calculate USDC needed and buy underlying assets
             usdcAmount = _buyUnderlyingForUnits(units);
-            
+
             if (minOutput > 0 && usdcAmount > minOutput) revert TooMuchRequested();
         }
 
@@ -366,7 +380,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         int128 deltaUnspecified = isExactInput
             ? -int128(uint128(indexTokensToMint)) // Exact input: hook owes index tokens
             : int128(uint128(usdcAmount));        // Exact output: hook is owed USDC
-            
+
         BeforeSwapDelta hookDelta =
             toBeforeSwapDelta(int128(-params.amountSpecified), deltaUnspecified);
 
@@ -435,7 +449,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         int128 deltaUnspecified = isExactInput
             ? -int128(uint128(usdcReceived))        // Exact input: hook provides USDC
             : -int128(uint128(indexTokensToBurn));   // Exact output: hook provides index tokens
-            
+
         BeforeSwapDelta hookDelta =
             toBeforeSwapDelta(int128(-params.amountSpecified), deltaUnspecified);
 
@@ -489,11 +503,15 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
     /// @notice Estimate units needed for a target USDC amount (for exact-output sells)
     function _estimateUnitsForUsdc(uint256 targetUsdc) internal view returns (uint256 units) {
-        // Calculate NAV per unit based on spot prices
         uint256 navPerUnit = 0;
         for (uint256 i = 0; i < underlyingTokens.length; i++) {
             (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(underlyingPoolKeys[i].toId());
-            uint256 usdcValue = _getUsdcValueOfUnderlying(sqrtPriceX96, usdcIsCurrency0[i], amountsPerUnit[i]);
+            uint256 usdcValue = _getUsdcValueOfUnderlying(
+                sqrtPriceX96,
+                usdcIsCurrency0[i],
+                amountsPerUnit[i],
+                underlyingDecimals[i]
+            );
             navPerUnit += usdcValue;
         }
 
@@ -597,23 +615,43 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // INTERNAL: PRICE HELPERS
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Get the USDC value of a specific underlying amount using the pool's sqrt price
-    function _getUsdcValueOfUnderlying(uint160 sqrtPriceX96, bool usdcIs0, uint256 underlyingAmount)
-        internal
-        pure
-        returns (uint256 usdcValue)
-    {
+    /// @notice Get the USDC value of a specific underlying amount using the pool's sqrt price.
+    /// @dev Normalizes the decimal difference between the underlying token and USDC so that
+    ///      the returned value is always expressed in USDC units (usdcDecimals).
+    ///      sqrtPriceX96 encodes the raw token ratio without decimal adjustment, so we must
+    ///      scale the result by 10^(underlyingDecimals - usdcDecimals) or its inverse.
+    function _getUsdcValueOfUnderlying(
+        uint160 sqrtPriceX96,
+        bool usdcIs0,
+        uint256 underlyingAmount,
+        uint8 tokenDecimals
+    ) internal view returns (uint256 usdcValue) {
         uint256 sqrtPrice = uint256(sqrtPriceX96);
+        uint256 rawValue;
+
         if (usdcIs0) {
             // USDC is token0, underlying is token1
-            // token0 = token1 * 2^192 / sqrtPrice^2
+            // price (token0 per token1) = 2^192 / sqrtPrice^2
+            // usdcValue = underlyingAmount * 2^192 / sqrtPrice^2
             uint256 intermediate = FullMath.mulDiv(underlyingAmount, 1 << 96, sqrtPrice);
-            usdcValue = FullMath.mulDiv(intermediate, 1 << 96, sqrtPrice);
+            rawValue = FullMath.mulDiv(intermediate, 1 << 96, sqrtPrice);
         } else {
             // USDC is token1, underlying is token0
-            // token1 = token0 * sqrtPrice^2 / 2^192
+            // price (token1 per token0) = sqrtPrice^2 / 2^192
+            // usdcValue = underlyingAmount * sqrtPrice^2 / 2^192
             uint256 intermediate = FullMath.mulDiv(underlyingAmount, sqrtPrice, 1 << 96);
-            usdcValue = FullMath.mulDiv(intermediate, sqrtPrice, 1 << 96);
+            rawValue = FullMath.mulDiv(intermediate, sqrtPrice, 1 << 96);
+        }
+
+        // Normalize decimal difference so result is in usdcDecimals units.
+        // sqrtPriceX96 reflects raw token amounts, so if tokenDecimals != usdcDecimals
+        // the rawValue is off by 10^(tokenDecimals - usdcDecimals).
+        if (tokenDecimals > usdcDecimals) {
+            usdcValue = rawValue / (10 ** (tokenDecimals - usdcDecimals));
+        } else if (usdcDecimals > tokenDecimals) {
+            usdcValue = rawValue * (10 ** (usdcDecimals - tokenDecimals));
+        } else {
+            usdcValue = rawValue;
         }
     }
 
