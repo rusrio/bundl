@@ -24,21 +24,20 @@ contract DeployScript is Script {
     IPoolManager manager;
     PoolSwapTest swapRouter;
     PoolModifyLiquidityTest modifyLiqRouter;
-    
+
     // Tokens
     address usdc;
     address wbtc;
     address weth;
 
     // Sepolia Addresses
-    address constant SEPOLIA_POOL_MANAGER = 0xE03A1074c86CFeDd5C142C4F04F1a1536e203543;
+    address constant SEPOLIA_POOL_MANAGER    = 0xE03A1074c86CFeDd5C142C4F04F1a1536e203543;
     address constant SEPOLIA_MODIFY_LIQ_ROUTER = 0x0C478023803a644c94c4CE1C1e7b9A087e411B0A;
-    address constant SEPOLIA_SWAP_ROUTER = 0x9B6b46e2c869aa39918Db7f52f5557FE577B6eEe;
+    address constant SEPOLIA_SWAP_ROUTER     = 0x9B6b46e2c869aa39918Db7f52f5557FE577B6eEe;
 
-    uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336; // sqrt(1) * 2^96
+    uint8  constant USDC_DECIMALS  = 6;
+    uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
 
-    // Required flags for BundlHook:
-    // afterInitialize(1<<12) | beforeAddLiquidity(1<<11) | beforeSwap(1<<7) | beforeSwapReturnDelta(1<<3)
     uint160 constant REQUIRED_FLAGS = uint160(
         Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
             | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
@@ -56,36 +55,33 @@ contract DeployScript is Script {
         if (block.chainid == 31337) {
             console.log("=== Local Anvil Network Detected ===");
             console.log("Deploying core V4 infrastructure...");
-            
+
             manager = new PoolManager(deployerAddress);
             swapRouter = new PoolSwapTest(manager);
             modifyLiqRouter = new PoolModifyLiquidityTest(manager);
 
             console.log("Deploying mock tokens...");
-            MockERC20 usdcMock = new MockERC20("USD Coin", "USDC", 6);
+            MockERC20 usdcMock = new MockERC20("USD Coin", "USDC", USDC_DECIMALS);
             MockERC20 wbtcMock = new MockERC20("Wrapped Bitcoin", "WBTC", 8);
             MockERC20 wethMock = new MockERC20("Wrapped Ether", "WETH", 18);
-            
+
             usdc = address(usdcMock);
             wbtc = address(wbtcMock);
             weth = address(wethMock);
 
-            // Mint some initial balances to deployer
             usdcMock.mint(deployerAddress, 100_000_000e6);
             wbtcMock.mint(deployerAddress, 100e8);
             wethMock.mint(deployerAddress, 1_000e18);
 
         } else if (block.chainid == 11155111) {
             console.log("=== Sepolia Testnet Detected ===");
-            
+
             manager = IPoolManager(SEPOLIA_POOL_MANAGER);
             swapRouter = PoolSwapTest(SEPOLIA_SWAP_ROUTER);
             modifyLiqRouter = PoolModifyLiquidityTest(SEPOLIA_MODIFY_LIQ_ROUTER);
 
-            // Using existing mock tokens on Sepolia (or deploy new ones if needed)
-            // For now, we deploy new mocks to ensure we have access to mint freely
             console.log("Deploying mock tokens for Sepolia tests...");
-            MockERC20 usdcMock = new MockERC20("Mock USD Coin", "USDC", 6);
+            MockERC20 usdcMock = new MockERC20("Mock USD Coin", "USDC", USDC_DECIMALS);
             MockERC20 wbtcMock = new MockERC20("Mock Wrapped Bitcoin", "WBTC", 8);
             MockERC20 wethMock = new MockERC20("Mock Wrapped Ether", "WETH", 18);
 
@@ -101,48 +97,52 @@ contract DeployScript is Script {
         }
 
         console.log("Deploying BundlFactory...");
-        BundlFactory factory = new BundlFactory(manager, usdc);
+        BundlFactory factory = new BundlFactory(manager, usdc, USDC_DECIMALS);
         console.log("BundlFactory deployed at:", address(factory));
 
-        // Let's create a demo Bundl Index completely off-chain before submitting the TX
-        // Note: we can mine the salt during the broadcast because script execution is local
-        
+        // Mine the hook salt off-chain before broadcasting
         bytes memory hookCreationCode = abi.encodePacked(
             type(BundlHook).creationCode,
-            abi.encode(manager, usdc)
+            abi.encode(manager, usdc, USDC_DECIMALS)
         );
 
         console.log("Mining hook address off-chain...");
         bytes32 salt = _mineSalt(hookCreationCode, REQUIRED_FLAGS, address(factory));
-        
+
         // Setup underlying pool parameters
         address[] memory uTokens = new address[](2);
         uTokens[0] = wbtc;
         uTokens[1] = weth;
 
         uint256[] memory amountsPerUnit = new uint256[](2);
-        // Since underlying pools are initialized at SQRT_PRICE_1_1 (1 wei = 1 wei),
-        // we must set realistic amountsPerUnit in WEI to avoid zero truncation.
-        // If 1 USDC (1e6) buys 1e6 wei of underlying, 1e5 wei per unit means 1 unit costs ~0.2 USDC.
         amountsPerUnit[0] = 1e5; // 100,000 wei of WBTC
         amountsPerUnit[1] = 1e5; // 100,000 wei of WETH
+
+        // 50/50 index weights
+        uint256[] memory weightsBps = new uint256[](2);
+        weightsBps[0] = 5000;
+        weightsBps[1] = 5000;
+
+        uint8[] memory tokenDecimals = new uint8[](2);
+        tokenDecimals[0] = 8;  // WBTC
+        tokenDecimals[1] = 18; // WETH
 
         PoolKey[] memory pKeys = new PoolKey[](2);
         bool[] memory usdcIs0 = new bool[](2);
 
-        // create wbtc/usdc pool
+        // Create WBTC/USDC pool
         (Currency c0, Currency c1) = _sortCurrencies(wbtc, usdc);
         pKeys[0] = PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: IHooks(address(0))});
         manager.initialize(pKeys[0], SQRT_PRICE_1_1);
         usdcIs0[0] = Currency.unwrap(c0) == usdc;
 
-        // create weth/usdc pool (no hooks)
+        // Create WETH/USDC pool
         (c0, c1) = _sortCurrencies(weth, usdc);
         pKeys[1] = PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: IHooks(address(0))});
         manager.initialize(pKeys[1], SQRT_PRICE_1_1);
         usdcIs0[1] = Currency.unwrap(c0) == usdc;
 
-        // --- ADD DEEP MOCK LIQUIDITY SO SWAPS DON'T REVERT WITH ZeroUnits ---
+        // Add deep mock liquidity so swaps don’t revert with ZeroUnits
         console.log("Adding mock liquidity to underlying pools...");
         MockERC20(usdc).mint(deployerAddress, 1_000_000_000e18);
         MockERC20(wbtc).mint(deployerAddress, 1_000_000_000e18);
@@ -151,14 +151,13 @@ contract DeployScript is Script {
         MockERC20(usdc).approve(address(modifyLiqRouter), type(uint256).max);
         MockERC20(wbtc).approve(address(modifyLiqRouter), type(uint256).max);
         MockERC20(weth).approve(address(modifyLiqRouter), type(uint256).max);
-        
-        // Deep range liquidity (-887220 to 887220 for tickSpacing 60)
+
         modifyLiqRouter.modifyLiquidity(
             pKeys[0],
             IPoolManager.ModifyLiquidityParams({
                 tickLower: -887220,
                 tickUpper: 887220,
-                liquidityDelta: 50_000_000e18, // Reduced liquidity to simulate price impact and save gas
+                liquidityDelta: 50_000_000e18,
                 salt: 0
             }),
             ""
@@ -169,22 +168,24 @@ contract DeployScript is Script {
             IPoolManager.ModifyLiquidityParams({
                 tickLower: -887220,
                 tickUpper: 887220,
-                liquidityDelta: 50_000_000e18, // Reduced liquidity to simulate price impact and save gas
+                liquidityDelta: 50_000_000e18,
                 salt: 0
             }),
             ""
         );
         console.log("Liquidity added safely.");
 
-        // Create the Bundl!
+        // Deploy the Bundl!
         console.log("Deploying Bundl (Token + Hook)...");
         (address hook, address token, PoolId idxPoolId) = factory.createBundl(
             "Blue Chip DeFi",
             "bBLUE",
             uTokens,
             amountsPerUnit,
+            weightsBps,
             pKeys,
             usdcIs0,
+            tokenDecimals,
             SQRT_PRICE_1_1
         );
 
@@ -218,13 +219,14 @@ contract DeployScript is Script {
         vm.stopBroadcast();
     }
 
-    /// @notice Mine a CREATE2 salt that produces an address with the required hook flag bits
     function _mineSalt(bytes memory creationCode, uint160 flags, address factory) internal pure returns (bytes32 salt) {
         bytes32 initCodeHash = keccak256(creationCode);
 
         for (uint256 i = 0; i < type(uint256).max; i++) {
             salt = bytes32(i);
-            address predicted = address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), factory, salt, initCodeHash)))));
+            address predicted = address(
+                uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), factory, salt, initCodeHash))))
+            );
 
             uint160 addressFlags = uint160(predicted) & Hooks.ALL_HOOK_MASK;
             if (addressFlags == flags) {
