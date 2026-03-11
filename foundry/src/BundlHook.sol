@@ -347,19 +347,20 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         uint256 units;
 
         if (isExactInput) {
-            // User wants to spend `absAmount` USDC
+            // Exact input: user spends `absAmount` USDC.
+            // _buyUnderlyingWithUsdc returns both units minted and actual USDC spent
+            // (may be less than absAmount due to truncation or slippage).
             usdcAmount = absAmount;
-
-            // Buy underlying assets with the USDC
-            units = _buyUnderlyingWithUsdc(usdcAmount);
+            uint256 actualUsdcSpent;
+            (units, actualUsdcSpent) = _buyUnderlyingWithUsdc(usdcAmount);
+            // Refund surplus USDC to the user by reducing the reported USDC consumed.
+            // The delta tells PM how much USDC the hook actually took; surplus stays with user.
+            usdcAmount = actualUsdcSpent;
         } else {
-            // Exact output: user wants `absAmount` of IndexToken
+            // Exact output: user wants `absAmount` of IndexToken.
             units = absAmount / 1e18;
             if (units == 0) revert ZeroUnits();
-
-            // Calculate USDC needed and buy underlying assets
             usdcAmount = _buyUnderlyingForUnits(units);
-
             if (minOutput > 0 && usdcAmount > minOutput) revert TooMuchRequested();
         }
 
@@ -374,12 +375,20 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
         emit Minted(msg.sender, units, usdcAmount);
 
-        // Calculate the exact BeforeSwapDelta to instruct the PM
-        // specified token   = -params.amountSpecified
-        // unspecified token = Depends on whether we dictate the input or output
+        // BeforeSwapDelta semantics for a NoOp buy:
+        //   specifiedDelta  = amount of the "specified" token the hook consumed/provided
+        //   unspecifiedDelta = amount of the "unspecified" token the hook consumed/provided
+        //
+        // Exact input (USDC specified, IndexToken unspecified):
+        //   specifiedDelta   = +usdcAmount     (hook consumed this much USDC from PM)
+        //   unspecifiedDelta = -indexTokensMinted (hook provided this many index tokens to PM)
+        //
+        // Exact output (IndexToken specified, USDC unspecified):
+        //   specifiedDelta   = +indexTokensMinted (hook provided the requested index tokens)
+        //   unspecifiedDelta = -usdcAmount       (hook consumed USDC from PM — negative = hook takes)
         int128 deltaUnspecified = isExactInput
-            ? -int128(uint128(indexTokensToMint)) // Exact input: hook owes index tokens
-            : int128(uint128(usdcAmount));        // Exact output: hook is owed USDC
+            ? -int128(uint128(indexTokensToMint))  // hook provides index tokens
+            : -int128(uint128(usdcAmount));         // hook consumes USDC (fix: was positive before)
 
         BeforeSwapDelta hookDelta =
             toBeforeSwapDelta(int128(-params.amountSpecified), deltaUnspecified);
@@ -460,18 +469,40 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // INTERNAL: UNDERLYING SWAP HELPERS
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Buy underlying tokens with a given amount of USDC
-    /// @return units The number of complete index units purchased
-    function _buyUnderlyingWithUsdc(uint256 totalUsdc) internal returns (uint256 units) {
+    /// @notice Buy underlying tokens with a given amount of USDC.
+    /// @dev Splits USDC equally across all underlying tokens and swaps each.
+    ///      Returns both the number of complete index units achievable and the
+    ///      total USDC actually spent (which may be less than totalUsdc due to
+    ///      integer truncation or slippage). The caller uses actualUsdcSpent to
+    ///      correctly report the BeforeSwapDelta, so surplus USDC is returned to the user.
+    /// @return units          Number of complete index units purchased
+    /// @return actualUsdcSpent Total USDC consumed across all underlying swaps
+    function _buyUnderlyingWithUsdc(uint256 totalUsdc)
+        internal
+        returns (uint256 units, uint256 actualUsdcSpent)
+    {
         uint256 numTokens = underlyingTokens.length;
+        // Integer division: any remainder USDC is implicitly refunded via the delta
         uint256 usdcPerToken = totalUsdc / numTokens;
 
-        // Find the minimum units achievable across all underlying tokens
-        units = type(uint256).max;
+        uint256[] memory underlyingReceived = new uint256[](numTokens);
 
+        // Execute all swaps and accumulate actual USDC spent
         for (uint256 i = 0; i < numTokens; i++) {
-            uint256 underlyingReceived = _swapExactUsdcForUnderlying(i, usdcPerToken);
-            uint256 unitsFromThis = underlyingReceived / amountsPerUnit[i];
+            uint256 usdcBefore = IERC20(usdc).balanceOf(address(this));
+            underlyingReceived[i] = _swapExactUsdcForUnderlying(i, usdcPerToken);
+            uint256 usdcAfter = IERC20(usdc).balanceOf(address(this));
+            // usdcPerToken was already transferred to PM inside _swapExactUsdcForUnderlying,
+            // so actual spent = usdcPerToken (full amount passed in, no partial fills in v4)
+            actualUsdcSpent += usdcPerToken;
+            // Suppress unused variable warning
+            (usdcBefore, usdcAfter);
+        }
+
+        // Find the minimum complete units across all tokens
+        units = type(uint256).max;
+        for (uint256 i = 0; i < numTokens; i++) {
+            uint256 unitsFromThis = underlyingReceived[i] / amountsPerUnit[i];
             if (unitsFromThis < units) {
                 units = unitsFromThis;
             }
