@@ -1,0 +1,121 @@
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(34, 27, 16, 0.8);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(246, 149, 14, 0.15);
+  padding: 0 clamp(1rem, 3vw, 5rem);
+}
+
+.inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1200px;
+  height: var(--nav-height);
+  margin: 0 auto;
+}
+
+.left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3xl);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  text-decoration: none;
+  color: var(--accent-primary);
+}
+
+.logoSvg {
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+.logo:hover .logoSvg {
+  transform: rotateY(180deg);
+}
+
+.logoText {
+  font-family: var(--font-heading);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.links {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xl);
+}
+
+.link {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out);
+  padding: var(--space-xs) 0;
+}
+
+.link:hover {
+  color: var(--text-primary);
+}
+
+.linkActive {
+  color: var(--accent-primary);
+  font-weight: 600;
+  border-bottom: 2px solid var(--accent-primary);
+  padding-bottom: 2px;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.iconBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: rgba(246, 149, 14, 0.1);
+  color: var(--accent-primary);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.iconBtn:hover {
+  background: rgba(246, 149, 14, 0.2);
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.avatar:hover {
+  border-color: var(--accent-primary-hover);
+}
+
+@media (max-width: 768px) {
+  .links {
+    display: none;
+  }
+}

@@ -1,0 +1,154 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  background: rgba(246, 149, 14, 0.04);
+  border: 1px solid rgba(246, 149, 14, 0.08);
+  border-radius: var(--radius-2xl);
+  padding: var(--space-lg);
+  text-decoration: none;
+  color: inherit;
+  transition: all var(--duration-normal) var(--ease-out);
+}
+
+.card:hover {
+  border-color: rgba(246, 149, 14, 0.35);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+/* ── Header ── */
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: var(--space-lg);
+}
+
+.name {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.card:hover .name {
+  color: var(--accent-primary);
+}
+
+.tokens {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.tokenAvatars {
+  display: flex;
+}
+
+.tokenDot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-primary);
+  margin-left: -8px;
+}
+
+.tokenDot:first-child {
+  margin-left: 0;
+}
+
+.tokenMore {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.perf {
+  text-align: right;
+}
+
+.perfValue {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.perfLabel {
+  display: block;
+  font-size: 0.5625rem;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+/* ── Chart ── */
+
+.chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 64px;
+  padding: 0 var(--space-xs);
+  margin: var(--space-lg) 0;
+}
+
+.bar {
+  flex: 1;
+  border-radius: 2px 2px 0 0;
+  min-height: 4px;
+  transition: height var(--duration-slow) var(--ease-out);
+}
+
+/* ── Footer ── */
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: var(--space-lg);
+  border-top: 1px solid rgba(246, 149, 14, 0.08);
+  margin-top: auto;
+}
+
+.risk {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.riskLabel {
+  font-size: 0.5625rem;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.riskBars {
+  display: flex;
+  gap: 3px;
+}
+
+.riskBar {
+  width: 22px;
+  height: 5px;
+  border-radius: var(--radius-full);
+}
+
+.viewBtn {
+  padding: var(--space-sm) var(--space-lg);
+  border-radius: var(--radius-md);
+  background: rgba(246, 149, 14, 0.1);
+  color: var(--accent-primary);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.card:hover .viewBtn {
+  background: var(--accent-primary);
+  color: var(--bg-primary);
+}

@@ -1,0 +1,135 @@
+.section {
+  padding: var(--space-4xl) var(--space-xl);
+}
+
+.container {
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+
+.header {
+  margin-bottom: var(--space-3xl);
+}
+
+.label {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent-primary);
+  margin-bottom: var(--space-sm);
+}
+
+.title {
+  font-size: 2.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* ── Grid ── */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-lg);
+}
+
+.card {
+  background: var(--surface-1);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  padding: var(--space-xl);
+  transition: all var(--duration-normal) var(--ease-out);
+}
+
+.card:hover {
+  border-color: var(--border-default);
+}
+
+/* ── Balance Card ── */
+
+.balanceCard {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xl);
+}
+
+.balanceIcon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-lg);
+  background: var(--accent-primary-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.balanceLabel {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--text-tertiary);
+  margin-bottom: var(--space-xs);
+}
+
+.balanceValue {
+  display: block;
+  font-family: var(--font-heading);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.balanceUsd {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-top: var(--space-xs);
+}
+
+/* ── Cards ── */
+
+.cardHeader {
+  margin-bottom: var(--space-lg);
+}
+
+.cardTitle {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* ── Empty State ── */
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-xl) 0;
+  text-align: center;
+}
+
+.emptyText {
+  font-size: 0.875rem;
+  color: var(--text-tertiary);
+  line-height: 1.6;
+}
+
+/* ── Responsive ── */
+
+@media (max-width: 768px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .title {
+    font-size: 1.75rem;
+  }
+
+  .balanceCard {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-md);
+  }
+}

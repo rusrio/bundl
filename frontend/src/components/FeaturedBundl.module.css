@@ -1,0 +1,144 @@
+.section {
+  margin-bottom: var(--space-3xl);
+}
+
+.card {
+  position: relative;
+  width: 100%;
+  height: 380px;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+.bgImage {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 70% 30%, rgba(245, 158, 11, 0.15) 0%, transparent 50%),
+    radial-gradient(ellipse at 30% 60%, rgba(6, 182, 212, 0.08) 0%, transparent 40%),
+    radial-gradient(ellipse at 90% 80%, rgba(234, 88, 12, 0.1) 0%, transparent 40%),
+    linear-gradient(135deg, var(--bg-tertiary) 0%, var(--bg-primary) 100%);
+  transition: transform 0.7s ease;
+}
+
+.card:hover .bgImage {
+  transform: scale(1.05);
+}
+
+/* Animated mesh dots overlay */
+.bgImage::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(245, 158, 11, 0.12) 1px, transparent 0);
+  background-size: 24px 24px;
+  mask-image: radial-gradient(ellipse 80% 60% at 60% 40%, black 20%, transparent 80%);
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, var(--bg-primary) 0%, rgba(34, 27, 16, 0.4) 50%, transparent 100%);
+  z-index: 1;
+}
+
+.content {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  padding: var(--space-2xl);
+  z-index: 2;
+  width: 100%;
+  max-width: 66%;
+}
+
+.badge {
+  display: inline-block;
+  padding: var(--space-xs) var(--space-md);
+  background: var(--accent-primary);
+  color: var(--bg-primary);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  border-radius: var(--radius-full);
+  margin-bottom: var(--space-lg);
+}
+
+.title {
+  font-size: 2.5rem;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: var(--space-sm);
+  letter-spacing: -0.02em;
+}
+
+.description {
+  font-size: 1.0625rem;
+  color: rgba(203, 213, 225, 0.85);
+  line-height: 1.6;
+  margin-bottom: var(--space-xl);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-lg);
+}
+
+.btnPrimary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  background: var(--accent-primary);
+  color: var(--bg-primary);
+  padding: var(--space-md) var(--space-xl);
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 0.9375rem;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.btnPrimary:hover {
+  filter: brightness(1.1);
+  box-shadow: var(--shadow-glow);
+}
+
+.btnSecondary {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(12px);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: var(--space-md) var(--space-xl);
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 0.9375rem;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.btnSecondary:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+@media (max-width: 768px) {
+  .card {
+    height: 300px;
+  }
+
+  .content {
+    max-width: 100%;
+    padding: var(--space-lg);
+  }
+
+  .title {
+    font-size: 1.75rem;
+  }
+
+  .description {
+    font-size: 0.9375rem;
+  }
+
+  .actions {
+    flex-direction: column;
+    gap: var(--space-sm);
+  }
+}

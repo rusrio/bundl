@@ -1,0 +1,75 @@
+.main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--space-xl);
+}
+
+.header {
+  margin-bottom: var(--space-2xl);
+}
+
+.backLink {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--text-tertiary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: none;
+  margin-bottom: var(--space-lg);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.backLink:hover {
+  color: var(--accent-primary);
+}
+
+.title {
+  font-size: 2.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--space-xs);
+}
+
+.subtitle {
+  color: var(--text-secondary);
+  font-size: 1rem;
+}
+
+/* ── Two-column layout ── */
+
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 480px;
+  gap: var(--space-2xl);
+  align-items: flex-start;
+}
+
+.dashboardCol {
+  min-width: 0;
+}
+
+/* Remove the default section padding from Dashboard when inside detail page */
+.dashboardCol :global(.section) {
+  padding: 0;
+}
+
+.swapCol {
+  position: sticky;
+  top: calc(var(--nav-height) + var(--space-lg));
+}
+
+/* Remove the default section padding from SwapCard when inside detail page */
+.swapCol :global(.section) {
+  padding: 0;
+}
+
+@media (max-width: 1024px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .swapCol {
+    position: static;
+  }
+}

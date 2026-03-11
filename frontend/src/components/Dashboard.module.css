@@ -1,0 +1,260 @@
+.section {
+  padding: var(--space-4xl) var(--space-xl);
+  position: relative;
+}
+
+.container {
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+
+.header {
+  margin-bottom: var(--space-3xl);
+}
+
+.label {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent-primary);
+  margin-bottom: var(--space-sm);
+}
+
+.title {
+  font-size: 2.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--space-sm);
+}
+
+.subtitle {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  max-width: 480px;
+}
+
+/* ── Grid ── */
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-lg);
+}
+
+.card {
+  background: var(--surface-1);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  padding: var(--space-xl);
+  transition: all var(--duration-normal) var(--ease-out);
+}
+
+.card:hover {
+  border-color: var(--border-default);
+  box-shadow: var(--shadow-md);
+}
+
+.cardWide {
+  grid-column: 1 / -1;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-xl);
+}
+
+.cardTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cardBadge {
+  padding: var(--space-xs) var(--space-md);
+  border-radius: var(--radius-full);
+  background: var(--accent-primary-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+
+.liveDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* ── Allocation Bar ── */
+
+.allocationBar {
+  display: flex;
+  height: 8px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  gap: 2px;
+  margin-bottom: var(--space-xl);
+}
+
+.allocationSegment {
+  border-radius: var(--radius-full);
+  transition: width var(--duration-slow) var(--ease-out);
+}
+
+/* ── Token List ── */
+
+.tokenList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.tokenRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-md) var(--space-lg);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.tokenRow:hover {
+  background: var(--surface-3);
+}
+
+.tokenInfo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.tokenDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tokenSymbol {
+  display: block;
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.tokenName {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+.tokenData {
+  text-align: right;
+}
+
+.tokenAllocation {
+  display: block;
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.tokenPerUnit {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+/* ── NAV Card ── */
+
+.navValue {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.navAmount {
+  font-family: var(--font-heading);
+  font-size: 2.5rem;
+  font-weight: 700;
+}
+
+.navChange {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--success);
+}
+
+.navDescription {
+  font-size: 0.8125rem;
+  color: var(--text-tertiary);
+  line-height: 1.6;
+}
+
+/* ── Backing Card ── */
+
+.backingList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.backingRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.backingToken {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.backingAmount {
+  font-family: var(--font-heading);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.backingTotal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.backingTotalValue {
+  font-family: var(--font-heading);
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* ── Responsive ── */
+
+@media (max-width: 768px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .title {
+    font-size: 1.75rem;
+  }
+}
