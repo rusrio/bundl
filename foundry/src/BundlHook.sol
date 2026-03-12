@@ -23,12 +23,15 @@ import {IBundlHook} from "./interfaces/IBundlHook.sol";
 ///         Intercepts swaps in the IndexToken/USDC pool, acquires underlying assets via
 ///         other v4 pools, and mints/burns the index token at NAV price.
 ///
-/// @dev    Sell burn pattern:
-///           beforeSwap  → sells underlying, records _pendingBurn, returns delta
-///           afterSwap   → takes index tokens from PM (now settled by router), burns them
-///         This is atomic within one tx and correctly reduces totalSupply.
+/// @dev Sell flow:
+///   beforeSwap:
+///     1. Sells underlying tokens → receives USDC as internal PM delta
+///     2. Materializes USDC: take(USDC→hook) + sync+transfer+settle → real ERC-20 balance in PM
+///     3. Records _pendingBurn, returns BeforeSwapDelta (PM delivers USDC to user)
+///   afterSwap:
+///     4. Router has settled index tokens into PM → take + burn them
 ///
-/// @dev    Units convention: all "index amounts" are in 1e18 scale (ERC-20 wei).
+/// @dev Units convention: all "index amounts" are in 1e18 scale (ERC-20 wei).
 contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
     using SafeERC20 for IERC20;
@@ -59,7 +62,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     BundlToken public indexToken;
 
     address[] public underlyingTokens;
-    /// @dev Amount of each underlying per 1e18 index tokens (amountsPerUnit[i] * indexWei / 1e18 = underlyingWei)
+    /// @dev Amount of each underlying per 1e18 index tokens
     uint256[] public amountsPerUnit;
     uint256[] public underlyingWeightsBps;
     PoolKey[] public underlyingPoolKeys;
@@ -72,7 +75,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     address public immutable usdc;
     uint8 public immutable usdcDecimals;
 
-    /// @dev Transient: index tokens to burn in the upcoming afterSwap. Set in beforeSwap, cleared in afterSwap.
+    /// @dev Set in beforeSwap(sell), cleared in afterSwap. Tracks index tokens to burn.
     uint256 private _pendingBurn;
 
     uint256 internal constant BPS = 10_000;
@@ -202,8 +205,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             : _handleSell(params, absAmount, hookData);
     }
 
-    /// @notice Burns the index tokens that the router deposited into the PM during a sell.
-    /// @dev    _pendingBurn is set in _handleSell and cleared here. No-op for buys.
+    /// @notice Burns index tokens the router deposited into PM during a sell.
     function afterSwap(
         address,
         PoolKey calldata key,
@@ -214,15 +216,12 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         if (PoolId.unwrap(key.toId()) != PoolId.unwrap(registeredPoolId)) {
             return (IHooks.afterSwap.selector, 0);
         }
-
         uint256 toBurn = _pendingBurn;
         if (toBurn > 0) {
             _pendingBurn = 0;
-            // Router has now settled: index tokens are in the PM. Take and burn them.
             poolManager.take(Currency.wrap(address(indexToken)), address(this), toBurn);
             indexToken.burn(address(this), toBurn);
         }
-
         return (IHooks.afterSwap.selector, 0);
     }
 
@@ -230,12 +229,10 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // PUBLIC FUNCTIONS
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Redeem index tokens for proportional underlying assets (bypass the pool).
-    /// @param  indexAmount  ERC-20 amount to redeem (1e18 = 1 full unit).
+    /// @notice Redeem index tokens for proportional underlying assets (bypass pool).
     function redeem(uint256 indexAmount) external override nonReentrant whenInitialized {
         if (indexAmount == 0) revert ZeroUnits();
         indexToken.burn(msg.sender, indexAmount);
-
         uint256[] memory amounts = new uint256[](underlyingTokens.length);
         for (uint256 i = 0; i < underlyingTokens.length; i++) {
             amounts[i] = FullMath.mulDiv(indexAmount, amountsPerUnit[i], WAD);
@@ -363,10 +360,10 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             if (minOutput > 0 && indexTokensToBurn > minOutput) revert TooMuchRequested();
         }
 
-        // Store for afterSwap — the router hasn't settled the user's index tokens yet.
+        // Record for afterSwap — router settles index tokens into PM after beforeSwap returns.
         _pendingBurn = indexTokensToBurn;
 
-        // Sell underlying proportional to indexTokensToBurn and deliver USDC to PM.
+        // Sell underlying → USDC materializes in PM as real ERC-20 balance.
         uint256 actualUsdcReceived = _sellUnderlyingForUsdc(indexTokensToBurn);
 
         if (isExactInput) {
@@ -475,11 +472,21 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         poolManager.take(Currency.wrap(underlyingTokens[tokenIndex]), address(this), underlyingAmount);
     }
 
+    /// @notice Swaps exact underlying for USDC and materializes the USDC as real ERC-20
+    ///         balance inside the PM so that BeforeSwapDelta can deliver it to the user.
+    /// @dev    Flow:
+    ///           1. swap(underlying → USDC): USDC lands as positive delta for the hook in the PM
+    ///           2. take(USDC → hook): pulls USDC out to hook's ERC-20 balance
+    ///           3. sync(underlying): snapshot PM balance before underlying deposit
+    ///           4. transfer(underlying → PM) + settle(): pay the swap input debt
+    ///           5. sync(USDC) + transfer(USDC → PM) + settle(): re-deposit USDC as real balance
+    ///         The PM now holds USDC as actual ERC-20 and can transfer it to the user.
     function _swapExactUnderlyingForUsdc(uint256 tokenIndex, uint256 underlyingAmount)
         internal returns (uint256 usdcReceived)
     {
         PoolKey memory poolKey = underlyingPoolKeys[tokenIndex];
         bool zeroForOne = !usdcIsCurrency0[tokenIndex];
+
         BalanceDelta delta = poolManager.swap(
             poolKey,
             IPoolManager.SwapParams({
@@ -489,10 +496,21 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             }),
             ""
         );
+
         int128 out = zeroForOne ? delta.amount1() : delta.amount0();
         usdcReceived = uint256(uint128(out > 0 ? out : -out));
+
+        // Step 2: pull USDC out of PM to hook's own balance (clears PM's internal credit to hook)
+        poolManager.take(Currency.wrap(usdc), address(this), usdcReceived);
+
+        // Step 3+4: pay the underlying input debt
         poolManager.sync(Currency.wrap(underlyingTokens[tokenIndex]));
         IERC20(underlyingTokens[tokenIndex]).safeTransfer(address(poolManager), underlyingAmount);
+        poolManager.settle();
+
+        // Step 5: re-deposit USDC as real ERC-20 balance so PM can transfer it to the user
+        poolManager.sync(Currency.wrap(usdc));
+        IERC20(usdc).safeTransfer(address(poolManager), usdcReceived);
         poolManager.settle();
     }
 
