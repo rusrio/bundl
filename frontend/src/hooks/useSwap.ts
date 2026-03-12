@@ -32,7 +32,6 @@ export function useApproveToken(tokenAddress: `0x${string}`, spender?: `0x${stri
   };
 
   const { isLoading: isWaiting, isSuccess } = useWaitForTransactionReceipt({ hash });
-
   return { approve, isPending: isPending || isWaiting, isSuccess, error };
 }
 
@@ -52,30 +51,20 @@ export function useSwapExactInput() {
 
     const c0 = indexToken.toLowerCase() < usdc.toLowerCase() ? indexToken : usdc;
     const c1 = indexToken.toLowerCase() < usdc.toLowerCase() ? usdc       : indexToken;
-    // Buy = USDC → IndexToken.
-    // zeroForOne = true  if USDC is currency0 (paying USDC to get IndexToken)
-    // zeroForOne = false if USDC is currency1
     const zeroForOne = c0.toLowerCase() === usdc.toLowerCase();
 
-    const key = {
-      currency0: c0,
-      currency1: c1,
-      fee: 3000,
-      tickSpacing: 60,
-      hooks: BUNDL_HOOK_ADDRESS,
-    };
+    const key = { currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: BUNDL_HOOK_ADDRESS };
 
     const MIN_SQRT_PRICE = 4295128739n;
     const MAX_SQRT_PRICE = 1461446703485210103287273052203988822378723970342n;
 
     const params = {
       zeroForOne,
-      amountSpecified: -amountIn,  // exact-in: negative
+      amountSpecified: -amountIn,
       sqrtPriceLimitX96: zeroForOne ? MIN_SQRT_PRICE + 1n : MAX_SQRT_PRICE - 1n,
     };
 
     const testSettings = { takeClaims: false, settleUsingBurn: false };
-    // hookData for buy = abi.encode(uint256 minOutput)
     const hookData = encodeAbiParameters(parseAbiParameters('uint256'), [minOutput]);
 
     const txHash = await writeContractAsync({
@@ -89,61 +78,57 @@ export function useSwapExactInput() {
   };
 
   const { isLoading: isWaiting, isSuccess } = useWaitForTransactionReceipt({ hash });
-
   return { swap, isPending: isPending || isWaiting, error, isSuccess };
 }
 
 // ---------------------------------------------------------------------------
-// SELL: IndexToken → USDC via BundlRouter.sellIndex()
+// SELL: IndexToken → USDC via BundlRouter.sellIndex(key, hookAddress, amount, minUsdc)
 //
-// Flow:
-//   1. approve(BundlRouter, indexAmount)     ← user approves BundlRouter
-//   2. sellIndex(key, indexAmount, minUsdc)  ← router handles deposit+swap+take
+// Generic router — works for any BundlHook index.
+// hookAddress defaults to BUNDL_HOOK_ADDRESS (first index).
 // ---------------------------------------------------------------------------
-export function useSellIndex() {
+export function useSellIndex(hookAddress?: `0x${string}`) {
   const { writeContractAsync, data: hash, isPending, error } = useWriteContract();
   const publicClient = usePublicClient();
   const { address } = useAccount();
 
-  const sell = async (indexAmount: bigint, minUsdc: bigint = 0n) => {
+  const sell = async (
+    indexTokenAddress: `0x${string}`,
+    indexAmount: bigint,
+    minUsdc: bigint = 0n,
+    overrideHook?: `0x${string}`
+  ) => {
     if (!address) throw new Error('Wallet not connected');
 
-    const usdc       = USDC_ADDRESS;
-    const indexToken = BUNDL_TOKEN_ADDRESS;
+    const hook = overrideHook ?? hookAddress ?? BUNDL_HOOK_ADDRESS;
+    const usdc = USDC_ADDRESS;
 
-    const c0 = indexToken.toLowerCase() < usdc.toLowerCase() ? indexToken : usdc;
-    const c1 = indexToken.toLowerCase() < usdc.toLowerCase() ? usdc       : indexToken;
+    const c0 = indexTokenAddress.toLowerCase() < usdc.toLowerCase() ? indexTokenAddress : usdc;
+    const c1 = indexTokenAddress.toLowerCase() < usdc.toLowerCase() ? usdc             : indexTokenAddress;
 
-    const key = {
-      currency0: c0,
-      currency1: c1,
-      fee: 3000,
-      tickSpacing: 60,
-      hooks: BUNDL_HOOK_ADDRESS,
-    };
+    const key = { currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: hook };
 
     // Step 1: approve BundlRouter to pull IndexToken
     const approveTx = await writeContractAsync({
-      address: indexToken,
+      address: indexTokenAddress,
       abi: ERC20_ABI,
       functionName: 'approve',
       args: [BUNDL_ROUTER_ADDRESS, indexAmount],
     });
     await publicClient!.waitForTransactionReceipt({ hash: approveTx });
 
-    // Step 2: sell via BundlRouter
+    // Step 2: sell via generic BundlRouter
     const txHash = await writeContractAsync({
       address: BUNDL_ROUTER_ADDRESS,
       abi: BUNDL_ROUTER_ABI,
       functionName: 'sellIndex',
-      args: [key, indexAmount, minUsdc],
+      args: [key, hook, indexAmount, minUsdc],
     });
     await publicClient!.waitForTransactionReceipt({ hash: txHash });
     return txHash;
   };
 
   const { isLoading: isWaiting, isSuccess } = useWaitForTransactionReceipt({ hash });
-
   return { sell, isPending: isPending || isWaiting, error, isSuccess };
 }
 
@@ -166,6 +151,5 @@ export function useRedeemIndex() {
   };
 
   const { isLoading: isWaiting, isSuccess } = useWaitForTransactionReceipt({ hash });
-
   return { redeem, isPending: isPending || isWaiting, isSuccess, error };
 }

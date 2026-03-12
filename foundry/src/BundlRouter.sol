@@ -13,18 +13,22 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {BundlHook} from "./BundlHook.sol";
 
 /// @title BundlRouter
-/// @notice Minimal sell router for BundlHook.
+/// @notice Generic sell router for any BundlHook index.
+///
+/// @dev One deployment serves all BundlHook instances.
+///      The caller passes `hookAddress` per call; the router reads
+///      `indexToken()` and `usdc()` dynamically from that hook.
 ///
 /// @dev Sell flow:
-///   1. transferFrom(user → router, indexAmount)   outside unlock
+///   1. transferFrom(user → router, indexAmount)        outside unlock
 ///   2. unlock()
 ///      a. sync(IndexToken) + transfer(router → PM) + settle()
 ///         → PM records +indexAmount IndexToken
-///      b. swap() → hook.beforeSwap:
+///      b. swap() → hook.beforeSwap (_handleSell):
 ///           - take(IndexToken, hook, indexToBurn)  PM: 0
 ///           - burn + sell underlyings → USDC in PM
 ///           - specifiedDelta = +indexToBurn, unspecifiedDelta = -usdcOut
-///      c. take(USDC, user, usdcOut)  PM USDC: 0
+///      c. take(USDC, user, usdcOut)   PM USDC: 0
 ///   Both PM balances = 0 at unlock close ✓
 contract BundlRouter is IUnlockCallback {
     using SafeERC20 for IERC20;
@@ -33,31 +37,36 @@ contract BundlRouter is IUnlockCallback {
     error InsufficientOutput();
 
     IPoolManager public immutable poolManager;
-    BundlHook    public immutable hook;
 
     struct CallbackData {
         PoolKey  key;
+        address  hookAddress;
         uint256  indexAmount;
         address  user;
         uint256  minUsdcOut;
     }
 
-    constructor(IPoolManager _pm, BundlHook _hook) {
+    constructor(IPoolManager _pm) {
         poolManager = _pm;
-        hook        = _hook;
     }
 
     // ─────────────────────────────── SELL ───────────────────────────────
 
-    /// @notice Sell exact `indexAmount` IndexToken for USDC.
-    /// @dev    User must approve this router for IndexToken.
+    /// @notice Sell exact `indexAmount` of any BundlHook IndexToken for USDC.
+    /// @param key          The (IndexToken, USDC) pool key for this index
+    /// @param hookAddress  The BundlHook that manages this index
+    /// @param indexAmount  Exact amount of IndexToken to sell (18 dec)
+    /// @param minUsdcOut   Minimum USDC to receive (slippage guard)
     function sellIndex(
         PoolKey calldata key,
+        address hookAddress,
         uint256 indexAmount,
         uint256 minUsdcOut
     ) external returns (uint256 usdcReceived) {
+        BundlHook hook = BundlHook(hookAddress);
+
         // Pull IndexToken from user to this router before entering unlock.
-        // Inside unlockCallback we will deposit them into PM.
+        // Inside unlockCallback we deposit them into PM.
         IERC20(address(hook.indexToken())).safeTransferFrom(
             msg.sender,
             address(this),
@@ -67,6 +76,7 @@ contract BundlRouter is IUnlockCallback {
         bytes memory result = poolManager.unlock(
             abi.encode(CallbackData({
                 key:         key,
+                hookAddress: hookAddress,
                 indexAmount: indexAmount,
                 user:        msg.sender,
                 minUsdcOut:  minUsdcOut
@@ -84,26 +94,22 @@ contract BundlRouter is IUnlockCallback {
         if (msg.sender != address(poolManager)) revert NotPoolManager();
 
         CallbackData memory p = abi.decode(data, (CallbackData));
+        BundlHook hook = BundlHook(p.hookAddress);
 
-        IERC20 indexERC20 = IERC20(address(hook.indexToken()));
+        address indexTokenAddr = address(hook.indexToken());
+        address usdcAddr       = hook.usdc();
 
         // ── Step 1: Deposit IndexToken into PM ──────────────────────────
-        // sync() snapshots PM's current IndexToken balance.
-        // Then we transfer from router → PM.
-        // settle() computes the difference → PM records +indexAmount.
-        poolManager.sync(Currency.wrap(address(hook.indexToken())));
-        indexERC20.safeTransfer(address(poolManager), p.indexAmount);
+        poolManager.sync(Currency.wrap(indexTokenAddr));
+        IERC20(indexTokenAddr).safeTransfer(address(poolManager), p.indexAmount);
         poolManager.settle();
         // PM IndexToken balance: +indexAmount
 
         // ── Step 2: Swap (triggers hook.beforeSwap / _handleSell) ───────
-        // zeroForOne = true  if IndexToken is currency0 (index → usdc)
-        // zeroForOne = false if IndexToken is currency1 (usdc ← index)
         bool indexIsCurrency0 =
-            Currency.unwrap(p.key.currency0) == address(hook.indexToken());
-        bool zeroForOne = indexIsCurrency0;
+            Currency.unwrap(p.key.currency0) == indexTokenAddr;
+        bool zeroForOne = indexIsCurrency0; // selling index → usdc
 
-        // hookData = abi.encode(user) so _handleSell knows who to attribute
         BalanceDelta delta = poolManager.swap(
             p.key,
             IPoolManager.SwapParams({
@@ -113,27 +119,22 @@ contract BundlRouter is IUnlockCallback {
                     ? TickMath.MIN_SQRT_PRICE + 1
                     : TickMath.MAX_SQRT_PRICE - 1
             }),
-            abi.encode(p.user)
+            abi.encode(p.user) // hookData → _handleSell reads user address
         );
         // After beforeSwap:
-        //   IndexToken: +deposit - take(hook) + specifiedDelta(+) = 0
-        //   USDC:       +sellUnderlyings (hook deposited into PM)
+        //   IndexToken: +deposit - take(hook) + specifiedDelta(+) = 0 ✓
+        //   USDC:       +sellUnderlyings deposited by hook
 
         // ── Step 3: Take USDC for user ──────────────────────────────────
         int128 usdcDelta = indexIsCurrency0
-            ? delta.amount1()   // USDC is currency1
-            : delta.amount0();  // USDC is currency0
+            ? delta.amount1()  // USDC is currency1
+            : delta.amount0(); // USDC is currency0
 
-        // usdcDelta is negative: PM owes us USDC (hook deposited it)
         uint256 usdcOut = uint128(usdcDelta < 0 ? -usdcDelta : usdcDelta);
 
         if (usdcOut < p.minUsdcOut) revert InsufficientOutput();
 
-        poolManager.take(
-            Currency.wrap(address(hook.usdc())),
-            p.user,
-            usdcOut
-        );
+        poolManager.take(Currency.wrap(usdcAddr), p.user, usdcOut);
         // PM USDC balance: 0 ✓
 
         return abi.encode(usdcOut);

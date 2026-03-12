@@ -40,9 +40,9 @@ export const V4_ROUTER_ABI = parseAbi([
   'function swap(PoolKey calldata key, SwapParams calldata params, TestSettings calldata testSettings, bytes calldata hookData) external payable returns (int256 delta)',
 ]);
 
-// BundlRouter — used for the sell path (IndexToken → USDC)
-// The user approves BundlRouter for IndexToken, then calls sellIndex.
+// BundlRouter — generic, one deployment for all BundlHook indices.
+// sellIndex(key, hookAddress, indexAmount, minUsdc)
 export const BUNDL_ROUTER_ABI = parseAbi([
   'struct PoolKey { address currency0; address currency1; uint24 fee; int24 tickSpacing; address hooks; }',
-  'function sellIndex(PoolKey calldata key, uint256 indexAmount, uint256 minUsdc) external returns (uint256 usdcReceived)',
+  'function sellIndex(PoolKey calldata key, address hookAddress, uint256 indexAmount, uint256 minUsdc) external returns (uint256 usdcReceived)',
 ]);

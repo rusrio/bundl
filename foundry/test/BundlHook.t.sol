@@ -43,8 +43,8 @@ contract BundlHookTest is Test {
 
     address public alice = address(0xA11CE);
 
-    uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
-    uint8   constant USDC_DECIMALS  = 6;
+    uint160 constant SQRT_PRICE_1_1   = 79228162514264337593543950336;
+    uint8   constant USDC_DECIMALS    = 6;
     uint256 constant SWAP_USDC_AMOUNT = 100e6;
 
     uint160 constant HOOK_FLAGS = uint160(
@@ -58,13 +58,15 @@ contract BundlHookTest is Test {
     uint160 constant HOOK_FLAGS_2 = HOOK_FLAGS | (1 << 20);
 
     function setUp() public {
-        manager = new PoolManager(address(this));
-        swapRouter = new PoolSwapTest(manager);
+        manager         = new PoolManager(address(this));
+        swapRouter      = new PoolSwapTest(manager);
         modifyLiqRouter = new PoolModifyLiquidityTest(manager);
+        // Generic router — no hook address needed
+        bundlRouter     = new BundlRouter(manager);
 
-        usdc = new MockERC20("USD Coin", "USDC", USDC_DECIMALS);
-        wbtc = new MockERC20("Wrapped Bitcoin", "WBTC", 8);
-        weth = new MockERC20("Wrapped Ether", "WETH", 18);
+        usdc = new MockERC20("USD Coin",         "USDC", USDC_DECIMALS);
+        wbtc = new MockERC20("Wrapped Bitcoin",  "WBTC", 8);
+        weth = new MockERC20("Wrapped Ether",    "WETH", 18);
 
         usdc.mint(address(this), type(uint128).max);
         usdc.mint(alice, 100_000e6);
@@ -79,8 +81,6 @@ contract BundlHookTest is Test {
         hook = BundlHook(address(HOOK_FLAGS));
 
         indexToken = new BundlToken("Bundl BTC-ETH", "bBTC-ETH", address(hook));
-
-        bundlRouter = new BundlRouter(manager, hook);
 
         _setupUnderlyingPools();
         _initializeHook();
@@ -254,8 +254,8 @@ contract BundlHookTest is Test {
 
         bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
 
-        uint256 usdcBefore   = usdc.balanceOf(alice);
-        uint256 indexBefore  = indexToken.balanceOf(alice);
+        uint256 usdcBefore  = usdc.balanceOf(alice);
+        uint256 indexBefore = indexToken.balanceOf(alice);
 
         vm.prank(alice);
         swapRouter.swap(
@@ -281,26 +281,23 @@ contract BundlHookTest is Test {
     // ═══════════════════════════════════════════════════════════════════════
 
     function test_sellExactIndexForUsdc() public {
-        // First buy some index tokens via PoolSwapTest (buy path unchanged)
         test_buyExactUsdcForIndex();
 
         uint256 indexBalance = indexToken.balanceOf(alice);
         assertTrue(indexBalance > 0, "Alice has no index tokens to sell");
 
-        console.log("[SELL] Index to sell:         ", indexBalance);
-        console.log("[SELL] Hook WBTC backing:     ", wbtc.balanceOf(address(hook)));
-        console.log("[SELL] Hook WETH backing:     ", weth.balanceOf(address(hook)));
+        console.log("[SELL] Index to sell:     ", indexBalance);
+        console.log("[SELL] Hook WBTC backing: ", wbtc.balanceOf(address(hook)));
+        console.log("[SELL] Hook WETH backing: ", weth.balanceOf(address(hook)));
 
-        // Alice approves BundlRouter to pull her IndexToken.
-        // BundlRouter transfers them to hook before the swap;
-        // hook burns them inside beforeSwap.
         vm.prank(alice);
         IERC20Minimal(address(indexToken)).approve(address(bundlRouter), indexBalance);
 
         uint256 usdcBefore = usdc.balanceOf(alice);
 
         vm.prank(alice);
-        uint256 usdcReceived = bundlRouter.sellIndex(indexPoolKey, indexBalance, 0);
+        // Generic router: pass hook address as second argument
+        uint256 usdcReceived = bundlRouter.sellIndex(indexPoolKey, address(hook), indexBalance, 0);
 
         console.log("[SELL] USDC received:         ", usdcReceived);
         console.log("[SELL] totalSupply after:     ", indexToken.totalSupply());
@@ -318,8 +315,6 @@ contract BundlHookTest is Test {
         usdc.approve(address(swapRouter), SWAP_USDC_AMOUNT);
 
         bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
-
-        // minOutput encoded as very large number → should revert TooLittleReceived
         bytes memory hookData = abi.encode(uint256(9999999999e18));
 
         vm.prank(alice);
@@ -348,20 +343,12 @@ contract BundlHookTest is Test {
         (Currency c0, Currency c1) = _sortCurrencies(address(wbtc), address(usdc));
         wbtcUsdcPoolKey = PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: IHooks(address(0))});
         manager.initialize(wbtcUsdcPoolKey, SQRT_PRICE_1_1);
-        modifyLiqRouter.modifyLiquidity(
-            wbtcUsdcPoolKey,
-            IPoolManager.ModifyLiquidityParams({tickLower: -887220, tickUpper: 887220, liquidityDelta: 100_000_000e18, salt: bytes32(0)}),
-            ""
-        );
+        modifyLiqRouter.modifyLiquidity(wbtcUsdcPoolKey, IPoolManager.ModifyLiquidityParams({tickLower: -887220, tickUpper: 887220, liquidityDelta: 100_000_000e18, salt: bytes32(0)}), "");
 
         (c0, c1) = _sortCurrencies(address(weth), address(usdc));
         wethUsdcPoolKey = PoolKey({currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: IHooks(address(0))});
         manager.initialize(wethUsdcPoolKey, SQRT_PRICE_1_1);
-        modifyLiqRouter.modifyLiquidity(
-            wethUsdcPoolKey,
-            IPoolManager.ModifyLiquidityParams({tickLower: -887220, tickUpper: 887220, liquidityDelta: 100_000_000e18, salt: bytes32(0)}),
-            ""
-        );
+        modifyLiqRouter.modifyLiquidity(wethUsdcPoolKey, IPoolManager.ModifyLiquidityParams({tickLower: -887220, tickUpper: 887220, liquidityDelta: 100_000_000e18, salt: bytes32(0)}), "");
     }
 
     function _initializeHook() internal {
