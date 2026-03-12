@@ -3,7 +3,6 @@ pragma solidity ^0.8.26;
 
 import {IHooks} from "v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "v4-core/src/interfaces/IPoolManager.sol";
-import {IUnlockCallback} from "v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {Hooks} from "v4-core/src/libraries/Hooks.sol";
 import {StateLibrary} from "v4-core/src/libraries/StateLibrary.sol";
 import {PoolKey} from "v4-core/src/types/PoolKey.sol";
@@ -24,6 +23,10 @@ import {IBundlHook} from "./interfaces/IBundlHook.sol";
 ///         Intercepts swaps in the IndexToken/USDC pool, acquires underlying assets via
 ///         other v4 pools, and mints/burns the index token at NAV price.
 /// @dev Requires beforeSwap + beforeSwapReturnDelta permissions (NoOp pattern).
+///
+/// Units convention:
+///   All internal "units" quantities are in 1e18 scale (i.e. they ARE the ERC-20 token
+///   amounts directly). 1 full index unit = 1e18. This allows fractional ownership.
 contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
     using SafeERC20 for IERC20;
@@ -56,7 +59,9 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     /// @notice Underlying tokens in the index basket
     address[] public underlyingTokens;
 
-    /// @notice Amount of each underlying token per 1 unit of index (scaled to token decimals)
+    /// @notice Amount of each underlying token per 1 FULL unit of index (1e18), scaled to token decimals.
+    /// @dev    E.g. for WBTC (8 dec): 58823 means 0.00058823 WBTC per full unit.
+    ///         For fractional units, actual underlying needed = tokenAmount * amountsPerUnit[i] / 1e18.
     uint256[] public amountsPerUnit;
 
     /// @notice Weight of each underlying token in basis points (sum must equal 10000)
@@ -81,7 +86,8 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     /// @notice USDC decimals (typically 6)
     uint8 public immutable usdcDecimals;
 
-    uint256 internal constant BPS = 10000;
+    uint256 internal constant BPS    = 10_000;
+    uint256 internal constant WAD    = 1e18;
     uint160 internal constant MIN_SQRT_PRICE = 4295128739;
     uint160 internal constant MAX_SQRT_PRICE = 1461446703485210103287273052203988822378723970342;
 
@@ -211,35 +217,22 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // PUBLIC FUNCTIONS
     // ═══════════════════════════════════════════════════════════════════════
 
-    function redeem(uint256 units) external override nonReentrant whenInitialized {
-        if (units == 0) revert ZeroUnits();
-        uint256 indexAmount = units * 1e18;
+    /// @notice Redeem index tokens for proportional underlying assets.
+    /// @param  indexAmount  Exact ERC-20 amount to redeem (18 decimals), e.g. 1e18 = 1 full unit.
+    function redeem(uint256 indexAmount) external override nonReentrant whenInitialized {
+        if (indexAmount == 0) revert ZeroUnits();
+
+        // Burn the user's index tokens
         indexToken.burn(msg.sender, indexAmount);
 
+        // Transfer proportional underlying: underlying = indexAmount * amountsPerUnit / WAD
         uint256[] memory amounts = new uint256[](underlyingTokens.length);
         for (uint256 i = 0; i < underlyingTokens.length; i++) {
-            amounts[i] = units * amountsPerUnit[i];
+            amounts[i] = FullMath.mulDiv(indexAmount, amountsPerUnit[i], WAD);
             if (IERC20(underlyingTokens[i]).balanceOf(address(this)) < amounts[i]) revert InsufficientBacking();
             IERC20(underlyingTokens[i]).safeTransfer(msg.sender, amounts[i]);
         }
-        emit Redeemed(msg.sender, units, amounts);
-    }
-
-    function sweepAndBurnIndex() external nonReentrant whenInitialized {
-        uint256 indexTokenCurrencyId = uint256(uint160(address(indexToken)));
-        uint256 claims = poolManager.balanceOf(address(this), indexTokenCurrencyId);
-        if (claims == 0) return;
-        poolManager.unlock(abi.encode(claims));
-    }
-
-    function unlockCallback(bytes calldata data) external returns (bytes memory) {
-        require(msg.sender == address(poolManager), "Only PM");
-        uint256 claims = abi.decode(data, (uint256));
-        uint256 indexTokenCurrencyId = uint256(uint160(address(indexToken)));
-        poolManager.burn(address(this), indexTokenCurrencyId, claims);
-        poolManager.take(Currency.wrap(address(indexToken)), address(this), claims);
-        indexToken.burn(address(this), claims);
-        return "";
+        emit Redeemed(msg.sender, indexAmount, amounts);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -274,32 +267,23 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         return usdcIsCurrency0;
     }
 
-    /// @notice Returns the current spot price (in USDC, scaled to usdcDecimals) for 1 full token
-    ///         of the underlying at index `tokenIndex`.
-    /// @dev    This is a pure read — no state changes. Safe to call from any frontend or contract.
-    ///         Works for any token/USDC decimal combination.
+    /// @notice Spot price in USDC (6 dec) for 1 full token of underlying[tokenIndex].
     function getSpotPrice(uint256 tokenIndex) external view returns (uint256 spotPriceUsdc) {
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(underlyingPoolKeys[tokenIndex].toId());
-        uint256 oneToken = 10 ** underlyingDecimals[tokenIndex];
-        spotPriceUsdc = _sqrtPriceToUsdcValue(
-            sqrtPriceX96,
-            usdcIsCurrency0[tokenIndex],
-            oneToken
-        );
+        spotPriceUsdc = _sqrtPriceToUsdcValue(sqrtPriceX96, usdcIsCurrency0[tokenIndex], 10 ** underlyingDecimals[tokenIndex]);
     }
 
-    /// @notice Returns spot prices for all underlying tokens in one call.
+    /// @notice Spot prices in USDC for all underlying tokens in one call.
     function getSpotPrices() external view returns (uint256[] memory spotPricesUsdc) {
         uint256 n = underlyingTokens.length;
         spotPricesUsdc = new uint256[](n);
         for (uint256 i = 0; i < n; i++) {
             (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(underlyingPoolKeys[i].toId());
-            uint256 oneToken = 10 ** underlyingDecimals[i];
-            spotPricesUsdc[i] = _sqrtPriceToUsdcValue(sqrtPriceX96, usdcIsCurrency0[i], oneToken);
+            spotPricesUsdc[i] = _sqrtPriceToUsdcValue(sqrtPriceX96, usdcIsCurrency0[i], 10 ** underlyingDecimals[i]);
         }
     }
 
-    /// @notice Get sqrtPriceX96, tick, and liquidity for each underlying pool
+    /// @notice sqrtPriceX96, tick, and liquidity for each underlying pool.
     function getPoolStates()
         external view
         returns (uint160[] memory sqrtPrices, int24[] memory ticks, uint128[] memory liquidities)
@@ -314,15 +298,11 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         }
     }
 
-    /// @notice NAV per index unit in USDC (scaled to usdcDecimals)
+    /// @notice NAV per 1 full index unit (1e18) in USDC (6 dec).
     function getNavPerUnit() external view returns (uint256 navPerUnit) {
         for (uint256 i = 0; i < underlyingTokens.length; i++) {
             (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(underlyingPoolKeys[i].toId());
-            navPerUnit += _sqrtPriceToUsdcValue(
-                sqrtPriceX96,
-                usdcIsCurrency0[i],
-                amountsPerUnit[i]
-            );
+            navPerUnit += _sqrtPriceToUsdcValue(sqrtPriceX96, usdcIsCurrency0[i], amountsPerUnit[i]);
         }
     }
 
@@ -337,33 +317,36 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         bool isExactInput = params.amountSpecified < 0;
 
         uint256 usdcAmount;
-        uint256 units;
+        // indexTokensToMint is in 1e18 scale (= the actual ERC-20 amount)
+        uint256 indexTokensToMint;
 
         if (isExactInput) {
             usdcAmount = absAmount;
             uint256 actualUsdcSpent;
-            (units, actualUsdcSpent) = _buyUnderlyingWithUsdc(usdcAmount);
+            (indexTokensToMint, actualUsdcSpent) = _buyUnderlyingWithUsdc(usdcAmount);
             usdcAmount = actualUsdcSpent;
         } else {
-            units = absAmount / 1e18;
-            if (units == 0) revert ZeroUnits();
-            usdcAmount = _buyUnderlyingForUnits(units);
+            // absAmount is the requested index token amount (1e18 scale)
+            indexTokensToMint = absAmount;
+            if (indexTokensToMint == 0) revert ZeroUnits();
+            usdcAmount = _buyUnderlyingForIndexAmount(indexTokensToMint);
             if (minOutput > 0 && usdcAmount > minOutput) revert TooMuchRequested();
         }
 
-        uint256 indexTokensToMint = units * 1e18;
+        if (indexTokensToMint == 0) revert ZeroUnits();
         if (isExactInput && minOutput > 0 && indexTokensToMint < minOutput) revert TooLittleReceived();
 
+        // Mint and deliver index tokens to the PoolManager
         indexToken.mint(address(this), indexTokensToMint);
         poolManager.sync(Currency.wrap(address(indexToken)));
         IERC20(address(indexToken)).transfer(address(poolManager), indexTokensToMint);
         poolManager.settle();
 
-        emit Minted(msg.sender, units, usdcAmount);
+        emit Minted(msg.sender, indexTokensToMint, usdcAmount);
 
         int128 deltaUnspecified = isExactInput
             ? -int128(uint128(indexTokensToMint))
-            : int128(uint128(usdcAmount));
+            :  int128(uint128(usdcAmount));
 
         return (IHooks.beforeSwap.selector, toBeforeSwapDelta(int128(-params.amountSpecified), deltaUnspecified), 0);
     }
@@ -378,25 +361,29 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         uint256 minOutput = hookData.length > 0 ? abi.decode(hookData, (uint256)) : 0;
         bool isExactInput = params.amountSpecified < 0;
 
-        uint256 units;
+        // indexTokensToBurn is in 1e18 scale
+        uint256 indexTokensToBurn;
         uint256 usdcReceived;
 
         if (isExactInput) {
-            units = absAmount / 1e18;
-            if (units == 0) revert ZeroUnits();
+            // absAmount = exact index token amount the user is selling
+            indexTokensToBurn = absAmount;
+            if (indexTokensToBurn == 0) revert ZeroUnits();
         } else {
+            // absAmount = exact USDC output the user wants
             usdcReceived = absAmount;
-            units = _estimateUnitsForUsdc(usdcReceived);
-            if (units == 0) revert ZeroUnits();
+            indexTokensToBurn = _estimateIndexForUsdc(usdcReceived);
+            if (indexTokensToBurn == 0) revert ZeroUnits();
+            if (minOutput > 0 && indexTokensToBurn > minOutput) revert TooMuchRequested();
         }
 
-        uint256 indexTokensToBurn = units * 1e18;
-        if (!isExactInput && minOutput > 0 && indexTokensToBurn > minOutput) revert TooMuchRequested();
+        // Take the index tokens the user sent to the PM, then burn them immediately.
+        // This replaces the old ERC-6909 claims pattern and correctly reduces totalSupply.
+        poolManager.take(Currency.wrap(address(indexToken)), address(this), indexTokensToBurn);
+        indexToken.burn(address(this), indexTokensToBurn);
 
-        uint256 indexTokenCurrencyId = uint256(uint160(address(indexToken)));
-        poolManager.mint(address(this), indexTokenCurrencyId, indexTokensToBurn);
-
-        uint256 actualUsdcReceived = _sellUnderlyingForUsdc(units);
+        // Sell the proportional underlying and receive USDC into the PM
+        uint256 actualUsdcReceived = _sellUnderlyingForUsdc(indexTokensToBurn);
 
         if (isExactInput) {
             usdcReceived = actualUsdcReceived;
@@ -405,11 +392,11 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             if (actualUsdcReceived < usdcReceived) revert TooLittleReceived();
         }
 
-        emit Sold(msg.sender, units, usdcReceived);
+        emit Sold(msg.sender, indexTokensToBurn, usdcReceived);
 
         int128 deltaUnspecified = isExactInput
             ? -int128(uint128(usdcReceived))
-            : int128(uint128(indexTokensToBurn));
+            :  int128(uint128(indexTokensToBurn));
 
         return (IHooks.beforeSwap.selector, toBeforeSwapDelta(int128(-params.amountSpecified), deltaUnspecified), 0);
     }
@@ -418,8 +405,11 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // INTERNAL: UNDERLYING SWAP HELPERS
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// @notice Buy underlying tokens with USDC, split by weights.
+    /// @return indexTokensToMint  Amount of index tokens to mint (1e18 scale).
+    /// @return actualUsdcSpent    USDC consumed.
     function _buyUnderlyingWithUsdc(uint256 totalUsdc)
-        internal returns (uint256 units, uint256 actualUsdcSpent)
+        internal returns (uint256 indexTokensToMint, uint256 actualUsdcSpent)
     {
         uint256 numTokens = underlyingTokens.length;
         uint256[] memory underlyingReceived = new uint256[](numTokens);
@@ -430,37 +420,46 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             actualUsdcSpent += usdcForToken;
         }
 
-        units = type(uint256).max;
+        // Compute mintable index tokens in 1e18 scale:
+        //   indexTokens = underlyingReceived * WAD / amountsPerUnit
+        // Take the minimum across all tokens (limiting token).
+        indexTokensToMint = type(uint256).max;
         for (uint256 i = 0; i < numTokens; i++) {
-            uint256 unitsFromThis = underlyingReceived[i] / amountsPerUnit[i];
-            if (unitsFromThis < units) units = unitsFromThis;
+            uint256 fromThis = FullMath.mulDiv(underlyingReceived[i], WAD, amountsPerUnit[i]);
+            if (fromThis < indexTokensToMint) indexTokensToMint = fromThis;
         }
-        if (units == 0) revert ZeroUnits();
+        if (indexTokensToMint == 0) revert ZeroUnits();
     }
 
-    function _buyUnderlyingForUnits(uint256 units) internal returns (uint256 totalUsdcSpent) {
+    /// @notice Buy exact underlying amounts for a given index token amount (1e18 scale).
+    function _buyUnderlyingForIndexAmount(uint256 indexAmount) internal returns (uint256 totalUsdcSpent) {
         for (uint256 i = 0; i < underlyingTokens.length; i++) {
-            totalUsdcSpent += _swapUsdcForExactUnderlying(i, units * amountsPerUnit[i]);
+            // underlying needed = indexAmount * amountsPerUnit / WAD
+            uint256 underlyingNeeded = FullMath.mulDiv(indexAmount, amountsPerUnit[i], WAD);
+            totalUsdcSpent += _swapUsdcForExactUnderlying(i, underlyingNeeded);
         }
     }
 
-    function _sellUnderlyingForUsdc(uint256 units) internal returns (uint256 usdcReceived) {
+    /// @notice Sell underlying proportional to indexAmount (1e18 scale) and receive USDC.
+    function _sellUnderlyingForUsdc(uint256 indexAmount) internal returns (uint256 usdcReceived) {
         for (uint256 i = 0; i < underlyingTokens.length; i++) {
-            uint256 underlyingAmount = units * amountsPerUnit[i];
+            uint256 underlyingAmount = FullMath.mulDiv(indexAmount, amountsPerUnit[i], WAD);
             if (IERC20(underlyingTokens[i]).balanceOf(address(this)) < underlyingAmount) revert InsufficientBacking();
             usdcReceived += _swapExactUnderlyingForUsdc(i, underlyingAmount);
         }
     }
 
-    function _estimateUnitsForUsdc(uint256 targetUsdc) internal view returns (uint256 units) {
+    /// @notice Estimate index token amount (1e18 scale) needed to get `targetUsdc`.
+    function _estimateIndexForUsdc(uint256 targetUsdc) internal view returns (uint256 indexAmount) {
         uint256 navPerUnit = 0;
         for (uint256 i = 0; i < underlyingTokens.length; i++) {
             (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(underlyingPoolKeys[i].toId());
             navPerUnit += _sqrtPriceToUsdcValue(sqrtPriceX96, usdcIsCurrency0[i], amountsPerUnit[i]);
         }
-        if (navPerUnit == 0) return 1;
-        units = (targetUsdc + navPerUnit - 1) / navPerUnit;
-        if (units == 0) units = 1;
+        if (navPerUnit == 0) return WAD;
+        // indexAmount (1e18) = targetUsdc * WAD / navPerUnit  (rounded up)
+        indexAmount = FullMath.mulDiv(targetUsdc, WAD, navPerUnit);
+        if (indexAmount == 0) indexAmount = 1;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -537,24 +536,8 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // INTERNAL: PRICE PRIMITIVE
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Core price primitive. Converts any `tokenAmount` (in token wei) to its USDC
-    ///         equivalent (in usdcWei) using the pool's current sqrtPriceX96.
-    ///
-    /// @dev    sqrtPriceX96 = sqrt(c1_wei / c0_wei) * 2^96
-    ///
-    ///         usdcIs0 = true  (c0=USDC, c1=token):
-    ///           ratio = (sqrtP/2^96)^2 = tokenWei/usdcWei
-    ///           usdcValue = tokenAmount * (2^96)^2 / sqrtP^2
-    ///           Units: tokenWei * (usdcWei/tokenWei) = usdcWei  ✔️  no extra decimal adjustment needed.
-    ///
-    ///         usdcIs0 = false (c0=token, c1=USDC):
-    ///           ratio = (sqrtP/2^96)^2 = usdcWei/tokenWei
-    ///           usdcValue = tokenAmount * sqrtP^2 / (2^96)^2
-    ///           Units: tokenWei * (usdcWei/tokenWei) = usdcWei  ✔️  no extra decimal adjustment needed.
-    ///
-    ///         In both cases the wei units cancel perfectly regardless of tokenDecimals or
-    ///         usdcDecimals, so NO additional decimal scaling is applied here.
-    ///         This makes the function safe for any (tokenDecimals, usdcDecimals) pair.
+    /// @notice Converts `tokenAmount` (token wei) to USDC wei using the pool sqrtPriceX96.
+    /// @dev    No decimal adjustment needed — wei units cancel in both pool orientations.
     function _sqrtPriceToUsdcValue(
         uint160 sqrtPriceX96,
         bool usdcIs0,
@@ -562,11 +545,9 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     ) internal pure returns (uint256 usdcValue) {
         uint256 sqrtPrice = uint256(sqrtPriceX96);
         if (usdcIs0) {
-            // usdcValue = tokenAmount / (sqrtP/2^96)^2 = tokenAmount * 2^192 / sqrtP^2
             uint256 intermediate = FullMath.mulDiv(tokenAmount, 1 << 96, sqrtPrice);
             usdcValue = FullMath.mulDiv(intermediate, 1 << 96, sqrtPrice);
         } else {
-            // usdcValue = tokenAmount * (sqrtP/2^96)^2 = tokenAmount * sqrtP^2 / 2^192
             uint256 intermediate = FullMath.mulDiv(tokenAmount, sqrtPrice, 1 << 96);
             usdcValue = FullMath.mulDiv(intermediate, sqrtPrice, 1 << 96);
         }
