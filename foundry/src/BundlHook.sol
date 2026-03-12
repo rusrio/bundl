@@ -22,22 +22,24 @@ import {IBundlHook} from "./interfaces/IBundlHook.sol";
 /// @notice Uniswap v4 hook — NAV-priced market maker for index tokens.
 ///
 /// @dev BeforeSwapDelta sign convention (v4):
-///   specifiedDelta  < 0  ⇒ hook gives the specified token to the PM  (PM owes less to user)
-///   specifiedDelta  > 0  ⇒ hook takes the specified token from the PM (hook owes PM)
-///   unspecifiedDelta< 0  ⇒ hook gives the unspecified token to the PM (PM delivers more to user)
-///   unspecifiedDelta> 0  ⇒ hook takes the unspecified token from the PM
+///   Positive delta  = hook RECEIVES that token from the PM
+///   Negative delta  = hook GIVES that token to the PM
+///   PM computes: amountToSwap = params.amountSpecified + specifiedDelta
+///   To bypass the pool entirely: specifiedDelta = -params.amountSpecified
 ///
-/// @dev BUY flow (USDC → IndexToken), exact-in:
-///   amountSpecified = -usdcAmount (negative = exact input)
-///   specifiedDelta  = +usdcAmount   ← hook takes USDC from PM (PM will collect it from user)
-///   unspecifiedDelta= -indexAmount  ← hook gives IndexToken to PM (PM delivers to user)
-///   Hook actions: buy underlyings, mint IndexToken, sync+transfer+settle into PM
+/// @dev BUY flow (USDC → IndexToken), exact-in (amountSpecified = -usdcIn):
+///   specifiedDelta   = +usdcIn    hook takes USDC from PM (PM settles it from user)
+///   unspecifiedDelta = -indexOut  hook gives IndexToken to PM (PM delivers to user)
+///   amountToSwap = -usdcIn + usdcIn = 0 → pool untouched
 ///
-/// @dev SELL flow (IndexToken → USDC), exact-in:
-///   amountSpecified = -indexAmount (negative = exact input)
-///   specifiedDelta  = -indexAmount  ← hook cancels PM’s debt: no transfer from user needed
-///   unspecifiedDelta= -usdcAmount   ← hook gives USDC to PM so PM can deliver to user
-///   Hook actions: transferFrom(user→hook), burn, sell underlyings, take USDC into hook, re-deposit
+/// @dev SELL flow (IndexToken → USDC), exact-in (amountSpecified = -indexIn):
+///   1. User transfers IndexToken to hook
+///   2. Hook deposits IndexToken into PM (sync+transfer+settle)
+///   3. Hook takes IndexToken from PM and burns it
+///   4. Hook sells underlyings → re-deposits USDC into PM
+///   specifiedDelta   = +indexIn   hook takes IndexToken from PM (offsets amountToSwap)
+///   unspecifiedDelta = -usdcOut   hook gives USDC to PM (PM delivers to user)
+///   amountToSwap = -indexIn + indexIn = 0 → pool untouched
 contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
     using SafeERC20 for IERC20;
@@ -73,8 +75,8 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     address public immutable usdc;
     uint8   public immutable usdcDecimals;
 
-    uint256 internal constant BPS           = 10_000;
-    uint256 internal constant WAD           = 1e18;
+    uint256 internal constant BPS            = 10_000;
+    uint256 internal constant WAD            = 1e18;
     uint160 internal constant MIN_SQRT_PRICE = 4295128739;
     uint160 internal constant MAX_SQRT_PRICE = 1461446703485210103287273052203988822378723970342;
 
@@ -95,34 +97,34 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         Hooks.validateHookPermissions(
             IHooks(address(this)),
             Hooks.Permissions({
-                beforeInitialize:              false,
-                afterInitialize:               true,
-                beforeAddLiquidity:            true,
-                afterAddLiquidity:             false,
-                beforeRemoveLiquidity:         false,
-                afterRemoveLiquidity:          false,
-                beforeSwap:                    true,
-                afterSwap:                     true,
-                beforeDonate:                  false,
-                afterDonate:                   false,
-                beforeSwapReturnDelta:         true,
-                afterSwapReturnDelta:          false,
-                afterAddLiquidityReturnDelta:  false,
+                beforeInitialize:               false,
+                afterInitialize:                true,
+                beforeAddLiquidity:             true,
+                afterAddLiquidity:              false,
+                beforeRemoveLiquidity:          false,
+                afterRemoveLiquidity:           false,
+                beforeSwap:                     true,
+                afterSwap:                      true,
+                beforeDonate:                   false,
+                afterDonate:                    false,
+                beforeSwapReturnDelta:          true,
+                afterSwapReturnDelta:           false,
+                afterAddLiquidityReturnDelta:   false,
                 afterRemoveLiquidityReturnDelta: false
             })
         );
     }
 
-    // ────────────────────────────── INITIALIZATION ──────────────────────────────
+    // ─────────────────────────── INITIALIZATION ───────────────────────────
 
     function initialize(
-        address        _indexToken,
-        address[]  calldata _tokens,
-        uint256[]  calldata _amounts,
-        uint256[]  calldata _weightsBps,
+        address       _indexToken,
+        address[] calldata _tokens,
+        uint256[] calldata _amounts,
+        uint256[] calldata _weightsBps,
         PoolKey[]  calldata _poolKeys,
-        bool[]     calldata _usdcIs0,
-        uint8[]    calldata _underlyingDecimals
+        bool[]    calldata _usdcIs0,
+        uint8[]   calldata _underlyingDecimals
     ) external {
         if (initialized) revert AlreadyInitialized();
         uint256 n = _tokens.length;
@@ -146,7 +148,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         initialized = true;
     }
 
-    // ────────────────────────────── HOOK CALLBACKS ──────────────────────────────
+    // ─────────────────────────── HOOK CALLBACKS ───────────────────────────
 
     function afterInitialize(address, PoolKey calldata key, uint160, int24)
         external override onlyPoolManager returns (bytes4)
@@ -172,7 +174,6 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         if (PoolId.unwrap(key.toId()) != PoolId.unwrap(registeredPoolId)) revert PoolNotRegistered();
 
         bool indexIsCurrency0 = Currency.unwrap(key.currency0) == address(indexToken);
-        // isBuy: user sends USDC, receives IndexToken
         bool isBuy = indexIsCurrency0 ? !params.zeroForOne : params.zeroForOne;
 
         uint256 absAmount = params.amountSpecified < 0
@@ -191,7 +192,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         return (IHooks.afterSwap.selector, 0);
     }
 
-    // ────────────────────────────── PUBLIC ──────────────────────────────
+    // ─────────────────────────── PUBLIC ───────────────────────────
 
     function redeem(uint256 indexAmount) external override nonReentrant whenInitialized {
         if (indexAmount == 0) revert ZeroUnits();
@@ -206,7 +207,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         emit Redeemed(msg.sender, indexAmount, amounts);
     }
 
-    // ────────────────────────────── VIEWS ──────────────────────────────
+    // ─────────────────────────── VIEWS ───────────────────────────
 
     function getUnderlyingTokens()    external view override returns (address[] memory) { return underlyingTokens; }
     function getAmountsPerUnit()       external view override returns (uint256[] memory) { return amountsPerUnit; }
@@ -255,18 +256,19 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         }
     }
 
-    // ────────────────────────────── BUY HANDLER ──────────────────────────────
+    // ─────────────────────────── BUY HANDLER ───────────────────────────
 
-    /// @dev Exact-in buy: amountSpecified = -usdcAmount
-    ///   specifiedDelta   = +usdcAmount  (hook takes USDC from PM; PM will settle it from user)
-    ///   unspecifiedDelta = -indexAmount (hook gives IndexToken into PM; PM delivers to user)
+    /// Exact-in buy: amountSpecified = -usdcIn
+    ///   specifiedDelta   = +usdcIn   → hook takes USDC from PM; PM settles it from user
+    ///   unspecifiedDelta = -indexOut → hook gives IndexToken to PM; PM delivers to user
+    ///   amountToSwap = -usdcIn + usdcIn = 0
     function _handleBuy(
         IPoolManager.SwapParams calldata params,
         uint256 absAmount,
         bytes calldata hookData
     ) internal returns (bytes4, BeforeSwapDelta, uint24) {
-        uint256 minOutput  = hookData.length >= 32 ? abi.decode(hookData, (uint256)) : 0;
-        bool    isExactIn  = params.amountSpecified < 0;
+        uint256 minOutput = hookData.length >= 32 ? abi.decode(hookData, (uint256)) : 0;
+        bool    isExactIn = params.amountSpecified < 0;
 
         uint256 usdcAmount;
         uint256 indexToMint;
@@ -286,7 +288,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         if (indexToMint == 0) revert ZeroUnits();
         if (isExactIn && minOutput > 0 && indexToMint < minOutput) revert TooLittleReceived();
 
-        // Deposit minted IndexToken into PM so PM can deliver it to the user
+        // Deposit minted IndexToken into PM so it can deliver it to the user
         indexToken.mint(address(this), indexToMint);
         poolManager.sync(Currency.wrap(address(indexToken)));
         IERC20(address(indexToken)).transfer(address(poolManager), indexToMint);
@@ -294,32 +296,38 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
         emit Minted(msg.sender, indexToMint, usdcAmount);
 
-        // specifiedDelta > 0: hook takes specified (USDC) from PM  → PM collects from user
-        // unspecifiedDelta < 0: hook gives unspecified (IndexToken) to PM → PM gives to user
-        int128 specDelta   = isExactIn
-            ?  int128(uint128(usdcAmount))   // hook takes USDC
-            : -int128(uint128(usdcAmount));  // exact-out: hook gives USDC back
-        int128 unspecDelta = isExactIn
-            ? -int128(uint128(indexToMint))  // hook gives IndexToken
-            :  int128(uint128(indexToMint)); // exact-out: hook takes IndexToken
-
-        return (IHooks.beforeSwap.selector, toBeforeSwapDelta(specDelta, unspecDelta), 0);
+        return (
+            IHooks.beforeSwap.selector,
+            toBeforeSwapDelta(
+                isExactIn ?  int128(uint128(usdcAmount))  : -int128(uint128(usdcAmount)),
+                isExactIn ? -int128(uint128(indexToMint)) :  int128(uint128(indexToMint))
+            ),
+            0
+        );
     }
 
-    // ────────────────────────────── SELL HANDLER ──────────────────────────────
+    // ─────────────────────────── SELL HANDLER ───────────────────────────
 
-    /// @dev Exact-in sell: amountSpecified = -indexAmount
-    ///   hookData MUST be abi.encode(address user). User must approve THIS contract.
+    /// Exact-in sell: amountSpecified = -indexIn
+    ///   hookData MUST be abi.encode(address user). User must have approved this hook.
     ///
-    ///   specifiedDelta   = -indexAmount (hook consumed IndexToken externally — cancels PM debt)
-    ///   unspecifiedDelta = -usdcAmount  (hook deposits USDC into PM so PM delivers it to user)
+    ///   Steps:
+    ///     1. transferFrom(user → hook)
+    ///     2. sync(IndexToken) + transfer(hook→PM) + settle()  → deposit into PM
+    ///     3. take(IndexToken, hook, indexIn)                   → hook gets IndexToken back
+    ///     4. burn(indexIn)
+    ///     5. sell underlyings → USDC re-deposited into PM
+    ///
+    ///   specifiedDelta   = +indexIn    → hook takes IndexToken from PM
+    ///                                     amountToSwap = -indexIn + indexIn = 0
+    ///   unspecifiedDelta = -usdcOut    → hook gives USDC to PM; PM delivers to user
     function _handleSell(
         IPoolManager.SwapParams calldata params,
         uint256 absAmount,
         bytes calldata hookData
     ) internal returns (bytes4, BeforeSwapDelta, uint24) {
         if (hookData.length < 32) revert MissingUserAddress();
-        address user     = abi.decode(hookData, (address));
+        address user      = abi.decode(hookData, (address));
         bool    isExactIn = params.amountSpecified < 0;
 
         uint256 indexToBurn;
@@ -329,18 +337,26 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             indexToBurn = absAmount;
             if (indexToBurn == 0) revert ZeroUnits();
         } else {
-            // exact-out USDC: estimate how many index tokens needed
             usdcReceived = absAmount;
             indexToBurn  = _estimateIndexForUsdc(usdcReceived);
             if (indexToBurn == 0) revert ZeroUnits();
         }
 
-        // 1. Pull IndexToken from user directly (user approved this hook)
+        // 1. Pull IndexToken from user
         IERC20(address(indexToken)).safeTransferFrom(user, address(this), indexToBurn);
-        // 2. Burn
+
+        // 2. Deposit IndexToken into PM (so the specifiedDelta accounting balances)
+        poolManager.sync(Currency.wrap(address(indexToken)));
+        IERC20(address(indexToken)).transfer(address(poolManager), indexToBurn);
+        poolManager.settle();
+
+        // 3. Take IndexToken back from PM into hook
+        poolManager.take(Currency.wrap(address(indexToken)), address(this), indexToBurn);
+
+        // 4. Burn
         indexToken.burn(address(this), indexToBurn);
-        // 3. Sell underlyings → USDC lands in this hook's ERC-20 balance
-        //    (_swapExactUnderlyingForUsdc already takes + re-deposits USDC in PM)
+
+        // 5. Sell underlyings → USDC ends up re-deposited in PM
         uint256 actualUsdc = _sellUnderlyingForUsdc(indexToBurn);
 
         if (isExactIn) {
@@ -352,26 +368,20 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
         emit Sold(user, indexToBurn, usdcReceived);
 
-        // specifiedDelta = -indexToBurn:
-        //   Negative means hook gives specified-side tokens to PM.
-        //   Since hook already burned them (they are gone), this cancels the PM’s
-        //   expectation to collect IndexToken from the user via settle.
-        //
-        // unspecifiedDelta = -usdcReceived:
-        //   Negative means hook gives unspecified-side (USDC) to PM.
-        //   USDC was already re-deposited into PM by _swapExactUnderlyingForUsdc,
-        //   so this delta tells PM to credit it to the user.
         return (
             IHooks.beforeSwap.selector,
             toBeforeSwapDelta(
-                -int128(uint128(indexToBurn)),   // specified: hook consumed IndexToken
-                -int128(uint128(usdcReceived))   // unspecified: hook gives USDC to PM
+                // specifiedDelta = +indexToBurn: hook takes IndexToken from PM
+                // this makes amountToSwap = -indexToBurn + indexToBurn = 0
+                int128(uint128(indexToBurn)),
+                // unspecifiedDelta = -usdcReceived: hook gives USDC to PM → PM delivers to user
+                -int128(uint128(usdcReceived))
             ),
             0
         );
     }
 
-    // ────────────────────────────── UNDERLYING SWAP HELPERS ──────────────────────────────
+    // ─────────────────────────── UNDERLYING HELPERS ───────────────────────────
 
     function _buyUnderlyingWithUsdc(uint256 totalUsdc)
         internal returns (uint256 indexToMint, uint256 actualUsdcSpent)
@@ -380,13 +390,13 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         uint256[] memory received = new uint256[](n);
         for (uint256 i; i < n; i++) {
             uint256 usdcForToken = totalUsdc * underlyingWeightsBps[i] / BPS;
-            received[i]   = _swapExactUsdcForUnderlying(i, usdcForToken);
+            received[i]      = _swapExactUsdcForUnderlying(i, usdcForToken);
             actualUsdcSpent += usdcForToken;
         }
         indexToMint = type(uint256).max;
         for (uint256 i; i < n; i++) {
-            uint256 fromThis = FullMath.mulDiv(received[i], WAD, amountsPerUnit[i]);
-            if (fromThis < indexToMint) indexToMint = fromThis;
+            uint256 units = FullMath.mulDiv(received[i], WAD, amountsPerUnit[i]);
+            if (units < indexToMint) indexToMint = units;
         }
         if (indexToMint == 0) revert ZeroUnits();
     }
@@ -424,89 +434,83 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         if (indexAmount == 0) indexAmount = 1;
     }
 
-    // ────────────────────────────── ATOMIC SWAP PRIMITIVES ──────────────────────────────
+    // ─────────────────────────── SWAP PRIMITIVES ───────────────────────────
 
-    /// @dev USDC → underlying. Hook receives underlying ERC-20.
     function _swapExactUsdcForUnderlying(uint256 idx, uint256 usdcAmount)
         internal returns (uint256 underlyingReceived)
     {
-        PoolKey memory key        = underlyingPoolKeys[idx];
-        bool          zeroForOne  = usdcIsCurrency0[idx];
-        BalanceDelta   delta      = poolManager.swap(
+        PoolKey memory key       = underlyingPoolKeys[idx];
+        bool          z4o        = usdcIsCurrency0[idx];
+        BalanceDelta  delta      = poolManager.swap(
             key,
             IPoolManager.SwapParams({
-                zeroForOne:       zeroForOne,
-                amountSpecified:  -int256(usdcAmount),
-                sqrtPriceLimitX96: zeroForOne ? MIN_SQRT_PRICE + 1 : MAX_SQRT_PRICE - 1
+                zeroForOne:        z4o,
+                amountSpecified:   -int256(usdcAmount),
+                sqrtPriceLimitX96: z4o ? MIN_SQRT_PRICE + 1 : MAX_SQRT_PRICE - 1
             }),
             ""
         );
-        int128 out = zeroForOne ? delta.amount1() : delta.amount0();
+        int128 out = z4o ? delta.amount1() : delta.amount0();
         underlyingReceived = uint256(uint128(out > 0 ? out : -out));
         poolManager.take(Currency.wrap(underlyingTokens[idx]), address(this), underlyingReceived);
     }
 
-    /// @dev USDC → exact underlying. Hook receives underlying ERC-20.
     function _swapUsdcForExactUnderlying(uint256 idx, uint256 underlyingAmount)
         internal returns (uint256 usdcSpent)
     {
-        PoolKey memory key       = underlyingPoolKeys[idx];
-        bool          zeroForOne = usdcIsCurrency0[idx];
-        BalanceDelta   delta     = poolManager.swap(
+        PoolKey memory key  = underlyingPoolKeys[idx];
+        bool          z4o   = usdcIsCurrency0[idx];
+        BalanceDelta  delta = poolManager.swap(
             key,
             IPoolManager.SwapParams({
-                zeroForOne:       zeroForOne,
-                amountSpecified:  int256(underlyingAmount),
-                sqrtPriceLimitX96: zeroForOne ? MIN_SQRT_PRICE + 1 : MAX_SQRT_PRICE - 1
+                zeroForOne:        z4o,
+                amountSpecified:   int256(underlyingAmount),
+                sqrtPriceLimitX96: z4o ? MIN_SQRT_PRICE + 1 : MAX_SQRT_PRICE - 1
             }),
             ""
         );
-        int128 inp = zeroForOne ? delta.amount0() : delta.amount1();
+        int128 inp = z4o ? delta.amount0() : delta.amount1();
         usdcSpent  = uint256(uint128(inp < 0 ? -inp : inp));
         poolManager.take(Currency.wrap(underlyingTokens[idx]), address(this), underlyingAmount);
     }
 
     /// @dev Underlying → USDC.
-    ///   Flow inside a single unlock:
-    ///     1. swap(underlying → USDC)  → PM owes hook USDC, hook owes PM underlying
-    ///     2. take(USDC → hook)        → hook receives USDC ERC-20
-    ///     3. sync(underlying) + transfer + settle → pays underlying debt to PM
-    ///     4. sync(USDC) + transfer + settle        → re-deposits USDC into PM as real balance
-    ///        (PM now holds USDC which it can later deliver to the user via the BeforeSwapDelta)
+    ///   1. swap(underlying → USDC)           PM owes hook USDC; hook owes PM underlying
+    ///   2. take(USDC → hook)                 hook receives USDC
+    ///   3. sync+transfer(underlying)+settle  pays underlying debt
+    ///   4. sync+transfer(USDC)+settle        re-deposits USDC into PM
+    ///      PM now holds real USDC, which the outer -usdcReceived delta credits to the user
     function _swapExactUnderlyingForUsdc(uint256 idx, uint256 underlyingAmount)
         internal returns (uint256 usdcReceived)
     {
-        PoolKey memory key       = underlyingPoolKeys[idx];
-        bool          zeroForOne = !usdcIsCurrency0[idx]; // underlying → USDC
+        PoolKey memory key  = underlyingPoolKeys[idx];
+        bool          z4o   = !usdcIsCurrency0[idx];
 
         BalanceDelta delta = poolManager.swap(
             key,
             IPoolManager.SwapParams({
-                zeroForOne:       zeroForOne,
-                amountSpecified:  -int256(underlyingAmount),
-                sqrtPriceLimitX96: zeroForOne ? MIN_SQRT_PRICE + 1 : MAX_SQRT_PRICE - 1
+                zeroForOne:        z4o,
+                amountSpecified:   -int256(underlyingAmount),
+                sqrtPriceLimitX96: z4o ? MIN_SQRT_PRICE + 1 : MAX_SQRT_PRICE - 1
             }),
             ""
         );
 
-        int128 out = zeroForOne ? delta.amount1() : delta.amount0();
+        int128 out = z4o ? delta.amount1() : delta.amount0();
         usdcReceived = uint256(uint128(out > 0 ? out : -out));
 
-        // Receive USDC from PM
         poolManager.take(Currency.wrap(usdc), address(this), usdcReceived);
 
-        // Pay underlying debt to PM
         poolManager.sync(Currency.wrap(underlyingTokens[idx]));
         IERC20(underlyingTokens[idx]).safeTransfer(address(poolManager), underlyingAmount);
         poolManager.settle();
 
-        // Re-deposit USDC into PM so the outer BeforeSwapDelta can deliver it to the user
         poolManager.sync(Currency.wrap(usdc));
         IERC20(usdc).safeTransfer(address(poolManager), usdcReceived);
         poolManager.settle();
     }
 
-    // ────────────────────────────── PRICE PRIMITIVE ──────────────────────────────
+    // ─────────────────────────── PRICE PRIMITIVE ───────────────────────────
 
     function _sqrtPriceToUsdcValue(uint160 sqrtPriceX96, bool usdcIs0, uint256 tokenAmount)
         internal pure returns (uint256 usdcValue)
@@ -519,7 +523,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         }
     }
 
-    // ────────────────────────────── UNIMPLEMENTED HOOKS ──────────────────────────────
+    // ─────────────────────────── UNIMPLEMENTED HOOKS ───────────────────────────
 
     function beforeInitialize(address, PoolKey calldata, uint160)
         external pure override returns (bytes4) { revert HookNotImplemented(); }
