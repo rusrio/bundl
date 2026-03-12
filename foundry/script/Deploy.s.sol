@@ -16,6 +16,7 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {BundlFactory} from "../src/BundlFactory.sol";
 import {BundlHook} from "../src/BundlHook.sol";
 import {BundlToken} from "../src/BundlToken.sol";
+import {BundlRouter} from "../src/BundlRouter.sol";
 
 contract DeployScript is Script {
     using PoolIdLibrary for PoolKey;
@@ -190,7 +191,7 @@ contract DeployScript is Script {
         tokenDecimals[1] = 18;
 
         console.log("Deploying Bundl index (Token + Hook + Pool)...");
-        (address hook, address token, PoolId idxPoolId) = factory.createBundl(
+        (address hookAddr, address token, PoolId idxPoolId) = factory.createBundl(
             BundlFactory.CreateBundlParams({
                 name:             "Blue Chip DeFi",
                 symbol:           "bBLUE",
@@ -204,10 +205,15 @@ contract DeployScript is Script {
             })
         );
 
+        // Deploy BundlRouter — needed for the sell path (IndexToken → USDC)
+        console.log("Deploying BundlRouter...");
+        BundlRouter bundlRouter = new BundlRouter(manager, BundlHook(hookAddr));
+        console.log("BundlRouter deployed at:", address(bundlRouter));
+
         // Seed the hook vault with initial backing
         // 150 units * amountsPerUnit to allow early sells/redeems
-        MockERC20(wbtc).transfer(hook, 150 * AMOUNTS_WBTC);  // ~$750k WBTC
-        MockERC20(weth).transfer(hook, 150 * AMOUNTS_WETH);  // ~$750k WETH
+        MockERC20(wbtc).transfer(hookAddr, 150 * AMOUNTS_WBTC);  // ~$750k WBTC
+        MockERC20(weth).transfer(hookAddr, 150 * AMOUNTS_WETH);  // ~$750k WETH
 
         console.log("--- Deployments ---");
         console.log("USDC:         ", usdc);
@@ -215,8 +221,9 @@ contract DeployScript is Script {
         console.log("WETH:         ", weth);
         console.log("PoolManager:  ", address(manager));
         console.log("BundlFactory: ", address(factory));
-        console.log("BundlHook:    ", hook);
+        console.log("BundlHook:    ", hookAddr);
         console.log("BundlToken:   ", token);
+        console.log("BundlRouter:  ", address(bundlRouter));
         console.log("NAV per unit ~$100 (50% WBTC + 50% WETH)");
         console.log("Pool liquidity: ~$500k per underlying pool");
 
@@ -228,7 +235,8 @@ contract DeployScript is Script {
         vm.serializeAddress(jsonObj, "swapRouterAddress",          address(swapRouter));
         vm.serializeAddress(jsonObj, "modifyLiquidityRouterAddress", address(modifyLiqRouter));
         vm.serializeAddress(jsonObj, "bundlFactoryAddress",        address(factory));
-        vm.serializeAddress(jsonObj, "bundlHookAddress",           hook);
+        vm.serializeAddress(jsonObj, "bundlHookAddress",           hookAddr);
+        vm.serializeAddress(jsonObj, "bundlRouterAddress",         address(bundlRouter));
         string memory finalJson = vm.serializeAddress(jsonObj, "bundlTokenAddress", token);
         vm.writeJson(finalJson, string.concat(vm.projectRoot(), "/deploy.json"));
 
