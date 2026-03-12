@@ -33,13 +33,17 @@ import {IBundlHook} from "./interfaces/IBundlHook.sol";
 ///   amountToSwap = -usdcIn + usdcIn = 0 → pool untouched
 ///
 /// @dev SELL flow (IndexToken → USDC), exact-in (amountSpecified = -indexIn):
-///   1. User transfers IndexToken to hook
-///   2. Hook deposits IndexToken into PM (sync+transfer+settle)
-///   3. Hook takes IndexToken from PM and burns it
-///   4. Hook sells underlyings → re-deposits USDC into PM
-///   specifiedDelta   = +indexIn   hook takes IndexToken from PM (offsets amountToSwap)
-///   unspecifiedDelta = -usdcOut   hook gives USDC to PM (PM delivers to user)
-///   amountToSwap = -indexIn + indexIn = 0 → pool untouched
+///   IndexToken is handled entirely out-of-band — PM never holds it.
+///   1. burn(user, indexIn)           directly from user (hook is minter)
+///   2. sell underlyings → USDC re-deposited into PM
+///   specifiedDelta   = +indexIn    cancels amountToSwap → pool untouched
+///   unspecifiedDelta = -usdcOut    hook gives USDC to PM → PM delivers to user
+///
+///   PM's net IndexToken balance = 0 throughout (we never deposit it).
+///   The specifiedDelta = +indexIn tells PM the hook "took" the specified tokens,
+///   so PM expects the router to settle indexIn from the user.
+///   BundlRouter is a custom router that skips that settlement because it
+///   already called burn(user) before the swap.
 contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
     using SafeERC20 for IERC20;
@@ -309,18 +313,18 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // ─────────────────────────── SELL HANDLER ───────────────────────────
 
     /// Exact-in sell: amountSpecified = -indexIn
-    ///   hookData MUST be abi.encode(address user). User must have approved this hook.
     ///
-    ///   Steps:
-    ///     1. transferFrom(user → hook)
-    ///     2. sync(IndexToken) + transfer(hook→PM) + settle()  → deposit into PM
-    ///     3. take(IndexToken, hook, indexIn)                   → hook gets IndexToken back
-    ///     4. burn(indexIn)
-    ///     5. sell underlyings → USDC re-deposited into PM
+    /// IndexToken is handled entirely out-of-band — PM never holds it.
+    /// BundlRouter calls indexToken.transferFrom(user → hook) BEFORE the swap,
+    /// then this handler burns them and sells underlyings.
     ///
-    ///   specifiedDelta   = +indexIn    → hook takes IndexToken from PM
-    ///                                     amountToSwap = -indexIn + indexIn = 0
-    ///   unspecifiedDelta = -usdcOut    → hook gives USDC to PM; PM delivers to user
+    /// hookData MUST be abi.encode(address user).
+    ///
+    /// Delta accounting:
+    ///   specifiedDelta   = +indexToBurn  → amountToSwap = -indexIn + indexIn = 0
+    ///                                      PM expects router to settle indexIn from user
+    ///                                      BundlRouter skips this (already handled)
+    ///   unspecifiedDelta = -usdcReceived → hook gives USDC to PM; PM delivers to user
     function _handleSell(
         IPoolManager.SwapParams calldata params,
         uint256 absAmount,
@@ -342,21 +346,12 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             if (indexToBurn == 0) revert ZeroUnits();
         }
 
-        // 1. Pull IndexToken from user
-        IERC20(address(indexToken)).safeTransferFrom(user, address(this), indexToBurn);
-
-        // 2. Deposit IndexToken into PM (so the specifiedDelta accounting balances)
-        poolManager.sync(Currency.wrap(address(indexToken)));
-        IERC20(address(indexToken)).transfer(address(poolManager), indexToBurn);
-        poolManager.settle();
-
-        // 3. Take IndexToken back from PM into hook
-        poolManager.take(Currency.wrap(address(indexToken)), address(this), indexToBurn);
-
-        // 4. Burn
+        // Burn directly from user — hook is the minter so _burn(user) is allowed.
+        // BundlRouter has already done transferFrom(user → hook) before the swap,
+        // so the tokens are sitting in the hook at this point.
         indexToken.burn(address(this), indexToBurn);
 
-        // 5. Sell underlyings → USDC ends up re-deposited in PM
+        // Sell underlyings → USDC re-deposited into PM by _swapExactUnderlyingForUsdc
         uint256 actualUsdc = _sellUnderlyingForUsdc(indexToBurn);
 
         if (isExactIn) {
@@ -368,13 +363,14 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
         emit Sold(user, indexToBurn, usdcReceived);
 
+        // specifiedDelta = +indexToBurn: cancels amountToSwap → pool untouched.
+        // PM's IndexToken balance = 0 throughout (we never deposited it).
+        // BundlRouter's unlockCallback skips settling the IndexToken side.
+        // unspecifiedDelta = -usdcReceived: PM delivers USDC to user.
         return (
             IHooks.beforeSwap.selector,
             toBeforeSwapDelta(
-                // specifiedDelta = +indexToBurn: hook takes IndexToken from PM
-                // this makes amountToSwap = -indexToBurn + indexToBurn = 0
                 int128(uint128(indexToBurn)),
-                // unspecifiedDelta = -usdcReceived: hook gives USDC to PM → PM delivers to user
                 -int128(uint128(usdcReceived))
             ),
             0

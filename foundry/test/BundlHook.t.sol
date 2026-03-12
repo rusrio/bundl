@@ -19,6 +19,7 @@ import {TickMath} from "v4-core/src/libraries/TickMath.sol";
 import {BundlHook} from "../src/BundlHook.sol";
 import {BundlFactory} from "../src/BundlFactory.sol";
 import {BundlToken} from "../src/BundlToken.sol";
+import {BundlRouter} from "../src/BundlRouter.sol";
 
 contract BundlHookTest is Test {
     using PoolIdLibrary for PoolKey;
@@ -27,6 +28,7 @@ contract BundlHookTest is Test {
     PoolManager public manager;
     PoolSwapTest public swapRouter;
     PoolModifyLiquidityTest public modifyLiqRouter;
+    BundlRouter public bundlRouter;
 
     MockERC20 public usdc;
     MockERC20 public wbtc;
@@ -77,6 +79,8 @@ contract BundlHookTest is Test {
         hook = BundlHook(address(HOOK_FLAGS));
 
         indexToken = new BundlToken("Bundl BTC-ETH", "bBTC-ETH", address(hook));
+
+        bundlRouter = new BundlRouter(manager, hook);
 
         _setupUnderlyingPools();
         _initializeHook();
@@ -277,7 +281,7 @@ contract BundlHookTest is Test {
     // ═══════════════════════════════════════════════════════════════════════
 
     function test_sellExactIndexForUsdc() public {
-        // First buy some index tokens
+        // First buy some index tokens via PoolSwapTest (buy path unchanged)
         test_buyExactUsdcForIndex();
 
         uint256 indexBalance = indexToken.balanceOf(alice);
@@ -287,35 +291,22 @@ contract BundlHookTest is Test {
         console.log("[SELL] Hook WBTC backing:     ", wbtc.balanceOf(address(hook)));
         console.log("[SELL] Hook WETH backing:     ", weth.balanceOf(address(hook)));
 
-        // Alice approves the HOOK directly (not the router) for IndexToken
+        // Alice approves BundlRouter to pull her IndexToken.
+        // BundlRouter transfers them to hook before the swap;
+        // hook burns them inside beforeSwap.
         vm.prank(alice);
-        IERC20Minimal(address(indexToken)).approve(address(hook), indexBalance);
+        IERC20Minimal(address(indexToken)).approve(address(bundlRouter), indexBalance);
 
-        bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
         uint256 usdcBefore = usdc.balanceOf(alice);
 
-        // Pass alice's address in hookData so the hook can pull her tokens
-        bytes memory hookData = abi.encode(alice);
-
         vm.prank(alice);
-        swapRouter.swap(
-            indexPoolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: !zeroForOne,
-                amountSpecified: -int256(indexBalance),
-                sqrtPriceLimitX96: !zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
-            }),
-            // settleUsingBurn: true tells the router NOT to transferFrom the user
-            // for the specified token — the hook handles it out-of-band
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: true}),
-            hookData
-        );
+        uint256 usdcReceived = bundlRouter.sellIndex(indexPoolKey, indexBalance, 0);
 
-        uint256 usdcReceived = usdc.balanceOf(alice) - usdcBefore;
         console.log("[SELL] USDC received:         ", usdcReceived);
         console.log("[SELL] totalSupply after:     ", indexToken.totalSupply());
         console.log("[SELL] Alice index remaining: ", indexToken.balanceOf(alice));
 
+        assertEq(usdc.balanceOf(alice) - usdcBefore, usdcReceived);
         assertTrue(usdcReceived > 0, "Alice did not receive USDC");
         assertEq(indexToken.balanceOf(alice), 0, "Alice should have sold all IndexToken");
         assertEq(indexToken.totalSupply(), 0, "totalSupply should be 0 after full sell");
