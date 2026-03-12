@@ -82,14 +82,13 @@ export function useSwapExactInput() {
 }
 
 // ---------------------------------------------------------------------------
-// SELL: IndexToken → USDC via BundlRouter.sellIndex(key, hookAddress, amount, minUsdc)
+// SELL: IndexToken → USDC via BundlRouter.sellIndex(key, indexAmount, minUsdc)
 //
 // Uses two separate useWriteContract instances so approve and sellIndex
 // each have independent hash/state — prevents MetaMask from skipping
 // the second popup when both share the same wagmi write hook.
 // ---------------------------------------------------------------------------
-export function useSellIndex(hookAddress?: `0x${string}`) {
-  // Separate hooks: one for approve, one for the actual sell
+export function useSellIndex() {
   const { writeContractAsync: approveAsync, isPending: isApprovePending } = useWriteContract();
   const { writeContractAsync: sellAsync, data: sellHash, isPending: isSellPending, error } = useWriteContract();
   const publicClient = usePublicClient();
@@ -99,19 +98,15 @@ export function useSellIndex(hookAddress?: `0x${string}`) {
     indexTokenAddress: `0x${string}`,
     indexAmount: bigint,
     minUsdc: bigint = 0n,
-    overrideHook?: `0x${string}`
   ) => {
     if (!address) throw new Error('Wallet not connected');
 
-    const hook = overrideHook ?? hookAddress ?? BUNDL_HOOK_ADDRESS;
     const usdc = USDC_ADDRESS;
-
     const c0 = indexTokenAddress.toLowerCase() < usdc.toLowerCase() ? indexTokenAddress : usdc;
     const c1 = indexTokenAddress.toLowerCase() < usdc.toLowerCase() ? usdc             : indexTokenAddress;
+    const key = { currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: BUNDL_HOOK_ADDRESS };
 
-    const key = { currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: hook };
-
-    // Step 1: approve BundlRouter to pull IndexToken (independent write instance)
+    // Step 1: approve BundlRouter to pull IndexToken
     const approveTxHash = await approveAsync({
       address: indexTokenAddress,
       abi: ERC20_ABI,
@@ -120,12 +115,12 @@ export function useSellIndex(hookAddress?: `0x${string}`) {
     });
     await publicClient!.waitForTransactionReceipt({ hash: approveTxHash });
 
-    // Step 2: sell via generic BundlRouter (independent write instance)
+    // Step 2: sell — 3 args: key, indexAmount, minUsdc
     const txHash = await sellAsync({
       address: BUNDL_ROUTER_ADDRESS,
       abi: BUNDL_ROUTER_ABI,
       functionName: 'sellIndex',
-      args: [key, hook, indexAmount, minUsdc],
+      args: [key, indexAmount, minUsdc],
     });
     await publicClient!.waitForTransactionReceipt({ hash: txHash });
     return txHash;
