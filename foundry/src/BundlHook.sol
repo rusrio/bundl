@@ -31,7 +31,7 @@ import {IBundlHook} from "./interfaces/IBundlHook.sol";
 ///   BundlHook.beforeSwap (_handleSell):
 ///     4. pm.take(IndexToken → hook, indexToBurn)  ← PM: +deposit - take = 0
 ///     5. burn(hook, indexToBurn)
-///     6. sellUnderlyings → USDC re-deposited in PM
+///     6. sellUnderlyings → USDC stays in PM
 ///     7. specifiedDelta   = +indexToBurn   (closes remaining PM delta)
 ///        unspecifiedDelta = -usdcReceived  (PM delivers USDC)
 ///
@@ -40,7 +40,7 @@ import {IBundlHook} from "./interfaces/IBundlHook.sol";
 ///
 ///   Balance sheet at unlock close:
 ///     IndexToken: +deposit - take + specifiedDelta(+) = 0  ✓
-///     USDC:       +sellUnderlyings - take(user)        = 0  ✓
+///     USDC:       +sellUnderlyings(in PM) - take(user) = 0  ✓
 contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
     using SafeERC20 for IERC20;
@@ -312,7 +312,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     ///   Here we take them back (to burn) and sell underlyings:
     ///     pm.take(IndexToken, hook, indexToBurn)  → PM: +indexAmount - indexToBurn = 0
     ///     burn(hook, indexToBurn)
-    ///     sellUnderlyings → USDC in PM
+    ///     sellUnderlyings → USDC stays in PM (positive delta for PM caller)
     ///
     ///   BeforeSwapDelta:
     ///     specifiedDelta   = +indexToBurn  → amountToSwap = -indexIn + indexIn = 0
@@ -344,7 +344,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         // PM IndexToken balance: +deposit(router) - take(hook) = 0
         poolManager.take(Currency.wrap(address(indexToken)), address(this), indexToBurn);
 
-        // Burn and sell underlyings → USDC re-deposited into PM
+        // Burn and sell underlyings → USDC stays in PM
         indexToken.burn(address(this), indexToBurn);
         uint256 actualUsdc = _sellUnderlyingForUsdc(indexToBurn);
 
@@ -357,12 +357,6 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
         emit Sold(user, indexToBurn, usdcReceived);
 
-        // specifiedDelta = +indexToBurn:
-        //   amountToSwap = -indexIn + indexToBurn = 0 → pool untouched
-        //   This also re-opens a +indexToBurn delta on PM, but the take() above
-        //   already closed the deposit, so net = 0 ✓
-        // unspecifiedDelta = -usdcReceived:
-        //   PM delivers USDC to router, router forwards to user ✓
         return (
             IHooks.beforeSwap.selector,
             toBeforeSwapDelta(
@@ -466,11 +460,19 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         poolManager.take(Currency.wrap(underlyingTokens[idx]), address(this), underlyingAmount);
     }
 
+    /// @dev Swaps exact underlying for USDC.
+    ///
+    ///   After the swap the PM has two open deltas for this contract:
+    ///     - Underlying: negative (hook owes underlying to PM)  → settle with sync+transfer+settle
+    ///     - USDC:       positive (PM owes USDC to hook)        → left in PM intentionally
+    ///
+    ///   The USDC positive delta is consumed later by the router via take(USDC, user).
+    ///   Do NOT call take(USDC) here — the hook has no physical USDC to re-deposit.
     function _swapExactUnderlyingForUsdc(uint256 idx, uint256 underlyingAmount)
         internal returns (uint256 usdcReceived)
     {
-        PoolKey memory key  = underlyingPoolKeys[idx];
-        bool          z4o   = !usdcIsCurrency0[idx];
+        PoolKey memory key = underlyingPoolKeys[idx];
+        bool           z4o = !usdcIsCurrency0[idx];
 
         BalanceDelta delta = poolManager.swap(
             key,
@@ -482,17 +484,13 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             ""
         );
 
+        // Positive delta = USDC the PM owes us; leave it in PM for the router to take later.
         int128 out = z4o ? delta.amount1() : delta.amount0();
         usdcReceived = uint256(uint128(out > 0 ? out : -out));
 
-        poolManager.take(Currency.wrap(usdc), address(this), usdcReceived);
-
+        // Settle the underlying debt: hook owes `underlyingAmount` to PM.
         poolManager.sync(Currency.wrap(underlyingTokens[idx]));
         IERC20(underlyingTokens[idx]).safeTransfer(address(poolManager), underlyingAmount);
-        poolManager.settle();
-
-        poolManager.sync(Currency.wrap(usdc));
-        IERC20(usdc).safeTransfer(address(poolManager), usdcReceived);
         poolManager.settle();
     }
 
