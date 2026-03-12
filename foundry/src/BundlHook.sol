@@ -24,16 +24,17 @@ import {IBundlHook} from "./interfaces/IBundlHook.sol";
 /// @dev Buy flow (USDC → IndexToken):
 ///   beforeSwap:
 ///     1. Splits USDC proportionally, buys each underlying via internal PM swaps
-///     2. Mints IndexToken to hook, sync+transfer+settle → deposits into PM
-///     3. Returns BeforeSwapDelta → PM delivers IndexToken to user, takes USDC from user
+///     2. Mints IndexToken, sync+transfer+settle → deposits into PM
+///     3. BeforeSwapDelta → PM delivers IndexToken to user, takes USDC
 ///
 /// @dev Sell flow (IndexToken → USDC):
+///   hookData must encode the actual token owner address: abi.encode(address user)
 ///   beforeSwap:
-///     1. transferFrom(caller, hook, indexAmount) → pulls IndexToken from user directly
+///     1. transferFrom(user, hook, indexAmount) using address from hookData
 ///     2. Burns IndexToken immediately
-///     3. Sells each underlying → USDC materializes as real ERC-20 in PM
-///     4. Returns BeforeSwapDelta → PM delivers USDC to user
-///   afterSwap: no-op (burn already done)
+///     3. Sells underlying → USDC materializes in PM as real ERC-20
+///     4. BeforeSwapDelta → PM delivers USDC to user
+///   afterSwap: no-op
 ///
 /// @dev Units: all index amounts in 1e18 scale.
 contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
@@ -57,6 +58,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     error DirectLiquidityNotAllowed();
     error TooLittleReceived();
     error TooMuchRequested();
+    error MissingUserAddress();
 
     // ═══════════════════════════════════════════════════════════════════════
     // STATE
@@ -186,7 +188,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     }
 
     function beforeSwap(
-        address sender,
+        address,
         PoolKey calldata key,
         IPoolManager.SwapParams calldata params,
         bytes calldata hookData
@@ -202,13 +204,12 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
         return isBuy
             ? _handleBuy(params, absAmount, hookData)
-            : _handleSell(sender, params, absAmount, hookData);
+            : _handleSell(params, absAmount, hookData);
     }
 
-    /// @notice No-op afterSwap. Burn is handled in beforeSwap for sells.
     function afterSwap(
         address,
-        PoolKey calldata key,
+        PoolKey calldata,
         IPoolManager.SwapParams calldata,
         BalanceDelta,
         bytes calldata
@@ -292,7 +293,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     function _handleBuy(IPoolManager.SwapParams calldata params, uint256 absAmount, bytes calldata hookData)
         internal returns (bytes4, BeforeSwapDelta, uint24)
     {
-        uint256 minOutput = hookData.length > 0 ? abi.decode(hookData, (uint256)) : 0;
+        uint256 minOutput = hookData.length >= 32 ? abi.decode(hookData, (uint256)) : 0;
         bool isExactInput = params.amountSpecified < 0;
 
         uint256 usdcAmount;
@@ -331,19 +332,16 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // INTERNAL: SELL
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @dev `sender` is the router. The actual user (msg.sender of the router call) is not
-    ///      directly accessible here, so we pull IndexToken from `sender` (the router),
-    ///      which must have already received an allowance from the user.
-    ///      PoolSwapTest transfers tokens from msg.sender to itself before calling swap,
-    ///      so the tokens are already sitting with the router when beforeSwap fires.
-    ///      We use transferFrom(sender, hook) to pull them from the router.
+    /// @dev hookData for sells must be abi.encode(address user) — the actual token owner.
+    ///      The user must have approved this hook contract to spend their IndexToken.
     function _handleSell(
-        address sender,
         IPoolManager.SwapParams calldata params,
         uint256 absAmount,
         bytes calldata hookData
     ) internal returns (bytes4, BeforeSwapDelta, uint24) {
-        uint256 minOutput = hookData.length > 0 ? abi.decode(hookData, (uint256)) : 0;
+        if (hookData.length < 32) revert MissingUserAddress();
+        address user = abi.decode(hookData, (address));
+
         bool isExactInput = params.amountSpecified < 0;
 
         uint256 indexTokensToBurn;
@@ -356,28 +354,23 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             usdcReceived = absAmount;
             indexTokensToBurn = _estimateIndexForUsdc(usdcReceived);
             if (indexTokensToBurn == 0) revert ZeroUnits();
-            if (minOutput > 0 && indexTokensToBurn > minOutput) revert TooMuchRequested();
         }
 
-        // Pull IndexToken from the router (which holds them on behalf of the user)
-        // and burn immediately — no afterSwap needed.
-        IERC20(address(indexToken)).safeTransferFrom(sender, address(this), indexTokensToBurn);
+        // Pull from the actual user (must have approved this hook)
+        IERC20(address(indexToken)).safeTransferFrom(user, address(this), indexTokensToBurn);
         indexToken.burn(address(this), indexTokensToBurn);
 
-        // Sell underlying → USDC materializes as real ERC-20 balance in PM.
+        // Sell underlying → USDC materializes as real ERC-20 balance in PM
         uint256 actualUsdcReceived = _sellUnderlyingForUsdc(indexTokensToBurn);
 
         if (isExactInput) {
             usdcReceived = actualUsdcReceived;
-            if (minOutput > 0 && usdcReceived < minOutput) revert TooLittleReceived();
         } else {
             if (actualUsdcReceived < usdcReceived) revert TooLittleReceived();
         }
 
-        emit Sold(msg.sender, indexTokensToBurn, usdcReceived);
+        emit Sold(user, indexTokensToBurn, usdcReceived);
 
-        // spec delta = indexTokensToBurn consumed (positive = hook takes from user side)
-        // unspecified delta = usdcReceived delivered (negative = hook gives to user)
         int128 deltaUnspecified = isExactInput
             ? -int128(uint128(usdcReceived))
             :  int128(uint128(indexTokensToBurn));
@@ -479,11 +472,6 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         poolManager.take(Currency.wrap(underlyingTokens[tokenIndex]), address(this), underlyingAmount);
     }
 
-    /// @dev Flow:
-    ///   1. swap(underlying → USDC): USDC = positive delta for hook
-    ///   2. take(USDC → hook): pulls USDC out to hook ERC-20 balance
-    ///   3. sync(underlying) + transfer + settle(): pays underlying debt
-    ///   4. sync(USDC) + transfer + settle(): re-deposits USDC as real balance in PM
     function _swapExactUnderlyingForUsdc(uint256 tokenIndex, uint256 underlyingAmount)
         internal returns (uint256 usdcReceived)
     {

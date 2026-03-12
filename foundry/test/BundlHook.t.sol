@@ -45,7 +45,6 @@ contract BundlHookTest is Test {
     uint8   constant USDC_DECIMALS  = 6;
     uint256 constant SWAP_USDC_AMOUNT = 100e6;
 
-    // Must match BundlHook constructor Hooks.Permissions exactly.
     uint160 constant HOOK_FLAGS = uint160(
         Hooks.AFTER_INITIALIZE_FLAG
         | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
@@ -54,7 +53,6 @@ contract BundlHookTest is Test {
         | Hooks.AFTER_SWAP_FLAG
     );
 
-    // Second hook address for isolation tests: extra bit outside ALL_HOOK_MASK (14 bits)
     uint160 constant HOOK_FLAGS_2 = HOOK_FLAGS | (1 << 20);
 
     function setUp() public {
@@ -85,7 +83,7 @@ contract BundlHookTest is Test {
         _initializeIndexPool();
 
         usdc.approve(address(swapRouter), type(uint256).max);
-        IERC20Minimal(address(indexToken)).approve(address(swapRouter), type(uint256).max);
+        usdc.approve(address(hook), type(uint256).max);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -159,7 +157,7 @@ contract BundlHookTest is Test {
 
     function test_redeemGivesUnderlyingAssets() public {
         uint256[] memory amounts = hook.getAmountsPerUnit();
-        uint256 indexAmount = 2e18; // 2 full units
+        uint256 indexAmount = 2e18;
 
         wbtc.transfer(address(hook), amounts[0] * 2);
         weth.transfer(address(hook), amounts[1] * 2);
@@ -285,17 +283,19 @@ contract BundlHookTest is Test {
         uint256 indexBalance = indexToken.balanceOf(alice);
         assertTrue(indexBalance > 0, "Alice has no index tokens to sell");
 
-        console.log("[SELL] Index to sell:          ", indexBalance);
-        console.log("[SELL] Hook WBTC backing:      ", wbtc.balanceOf(address(hook)));
-        console.log("[SELL] Hook WETH backing:      ", weth.balanceOf(address(hook)));
-        console.log("[SELL] Hook USDC balance:      ", usdc.balanceOf(address(hook)));
-        console.log("[SELL] totalSupply before:     ", indexToken.totalSupply());
+        console.log("[SELL] Index to sell:         ", indexBalance);
+        console.log("[SELL] Hook WBTC backing:     ", wbtc.balanceOf(address(hook)));
+        console.log("[SELL] Hook WETH backing:     ", weth.balanceOf(address(hook)));
 
+        // Alice approves the HOOK directly (not the router) for the sell
         vm.prank(alice);
-        IERC20Minimal(address(indexToken)).approve(address(swapRouter), indexBalance);
+        IERC20Minimal(address(indexToken)).approve(address(hook), indexBalance);
 
         bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
         uint256 usdcBefore = usdc.balanceOf(alice);
+
+        // Pass alice's address in hookData so the hook can pull her tokens
+        bytes memory hookData = abi.encode(alice);
 
         vm.prank(alice);
         swapRouter.swap(
@@ -306,13 +306,13 @@ contract BundlHookTest is Test {
                 sqrtPriceLimitX96: !zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
             }),
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            ""
+            hookData
         );
 
         uint256 usdcReceived = usdc.balanceOf(alice) - usdcBefore;
-        console.log("[SELL] USDC received:          ", usdcReceived);
-        console.log("[SELL] totalSupply after:      ", indexToken.totalSupply());
-        console.log("[SELL] Alice index remaining:  ", indexToken.balanceOf(alice));
+        console.log("[SELL] USDC received:         ", usdcReceived);
+        console.log("[SELL] totalSupply after:     ", indexToken.totalSupply());
+        console.log("[SELL] Alice index remaining: ", indexToken.balanceOf(alice));
 
         assertTrue(usdcReceived > 0, "Alice did not receive USDC");
         assertEq(indexToken.balanceOf(alice), 0, "Alice should have sold all IndexToken");
@@ -325,6 +325,8 @@ contract BundlHookTest is Test {
         usdc.approve(address(swapRouter), SWAP_USDC_AMOUNT);
 
         bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
+
+        // minOutput encoded as very large number → should revert TooLittleReceived
         bytes memory hookData = abi.encode(uint256(9999999999e18));
 
         vm.prank(alice);
@@ -403,4 +405,5 @@ contract BundlHookTest is Test {
 
 interface IERC20Minimal {
     function approve(address spender, uint256 amount) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
 }
