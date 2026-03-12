@@ -11,6 +11,7 @@ export const BUNDL_HOOK_ABI = parseAbi([
   "function getTotalBacking() external view returns (uint256[] memory)",
   "function getPoolStates() external view returns (uint160[] memory sqrtPrices, int24[] memory ticks, uint128[] memory liquidities)",
   "function getNavPerUnit() external view returns (uint256 navPerUnit)",
+  "function getUsdcIs0() external view returns (bool[] memory)",
   "function redeem(uint256 units) external"
 ]);
 
