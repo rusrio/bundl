@@ -20,15 +20,9 @@ import {BundlHook} from "../src/BundlHook.sol";
 import {BundlFactory} from "../src/BundlFactory.sol";
 import {BundlToken} from "../src/BundlToken.sol";
 
-/// @title BundlHookTest
-/// @notice Integration tests for the BundlHook NoOp market maker
 contract BundlHookTest is Test {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // STATE
-    // ═══════════════════════════════════════════════════════════════════════
 
     PoolManager public manager;
     PoolSwapTest public swapRouter;
@@ -49,23 +43,19 @@ contract BundlHookTest is Test {
 
     uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
     uint8   constant USDC_DECIMALS  = 6;
-
-    // 100 USDC — realistic amount that avoids uint256 overflow in units * 1e18
-    // With amountsPerUnit=1e6 and 50/50 split: usdcPerToken=50e6,
-    // underlyingReceived~50e6, units=50e6/1e6=50, indexTokens=50*1e18 (safe)
     uint256 constant SWAP_USDC_AMOUNT = 100e6;
 
+    // Must match BundlHook constructor Hooks.Permissions exactly.
     uint160 constant HOOK_FLAGS = uint160(
-        Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
-            | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
+        Hooks.AFTER_INITIALIZE_FLAG
+        | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
+        | Hooks.BEFORE_SWAP_FLAG
+        | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
+        | Hooks.AFTER_SWAP_FLAG
     );
 
     // Second hook address for isolation tests: extra bit outside ALL_HOOK_MASK (14 bits)
     uint160 constant HOOK_FLAGS_2 = HOOK_FLAGS | (1 << 20);
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // SETUP
-    // ═══════════════════════════════════════════════════════════════════════
 
     function setUp() public {
         manager = new PoolManager(address(this));
@@ -110,21 +100,20 @@ contract BundlHookTest is Test {
     function test_underlyingConfig() public view {
         address[] memory tokens = hook.getUnderlyingTokens();
         assertEq(tokens.length, 2);
-
         uint256[] memory amounts = hook.getAmountsPerUnit();
         assertEq(amounts.length, 2);
-
         uint256[] memory weights = hook.getUnderlyingWeightsBps();
         assertEq(weights.length, 2);
-        assertEq(weights[0], 5000, "WBTC weight should be 50%");
-        assertEq(weights[1], 5000, "WETH weight should be 50%");
+        assertEq(weights[0], 5000);
+        assertEq(weights[1], 5000);
     }
 
     function test_hookAddressHasCorrectFlags() public view {
-        assertTrue(uint160(address(hook)) & Hooks.BEFORE_SWAP_FLAG != 0, "Missing BEFORE_SWAP_FLAG");
-        assertTrue(uint160(address(hook)) & Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG != 0, "Missing BEFORE_SWAP_RETURNS_DELTA_FLAG");
-        assertTrue(uint160(address(hook)) & Hooks.AFTER_INITIALIZE_FLAG != 0, "Missing AFTER_INITIALIZE_FLAG");
-        assertTrue(uint160(address(hook)) & Hooks.BEFORE_ADD_LIQUIDITY_FLAG != 0, "Missing BEFORE_ADD_LIQUIDITY_FLAG");
+        assertTrue(uint160(address(hook)) & Hooks.BEFORE_SWAP_FLAG != 0);
+        assertTrue(uint160(address(hook)) & Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG != 0);
+        assertTrue(uint160(address(hook)) & Hooks.AFTER_INITIALIZE_FLAG != 0);
+        assertTrue(uint160(address(hook)) & Hooks.BEFORE_ADD_LIQUIDITY_FLAG != 0);
+        assertTrue(uint160(address(hook)) & Hooks.AFTER_SWAP_FLAG != 0);
     }
 
     function test_cannotReinitialize() public {
@@ -135,7 +124,6 @@ contract BundlHookTest is Test {
         bool[]    memory usdcIs0  = new bool[](1);
         uint8[]   memory decimals = new uint8[](1);
         weights[0] = 10000;
-
         vm.expectRevert(BundlHook.AlreadyInitialized.selector);
         hook.initialize(address(indexToken), tokens, amounts, weights, poolKeys, usdcIs0, decimals);
     }
@@ -157,7 +145,7 @@ contract BundlHookTest is Test {
 
         tokens[0] = address(wbtc);     tokens[1] = address(weth);
         amounts[0] = 1e6;              amounts[1] = 1e6;
-        weights[0] = 3000;             weights[1] = 3000; // sum = 6000 != 10000
+        weights[0] = 3000;             weights[1] = 3000;
         poolKeys[0] = wbtcUsdcPoolKey; poolKeys[1] = wethUsdcPoolKey;
         decimals[0] = 8;               decimals[1] = 18;
 
@@ -171,23 +159,25 @@ contract BundlHookTest is Test {
 
     function test_redeemGivesUnderlyingAssets() public {
         uint256[] memory amounts = hook.getAmountsPerUnit();
-        uint256 units = 2;
+        uint256 indexAmount = 2e18; // 2 full units
 
-        wbtc.transfer(address(hook), amounts[0] * units);
-        weth.transfer(address(hook), amounts[1] * units);
+        wbtc.transfer(address(hook), amounts[0] * 2);
+        weth.transfer(address(hook), amounts[1] * 2);
 
         vm.prank(address(hook));
-        indexToken.mint(alice, units * 1e18);
+        indexToken.mint(alice, indexAmount);
 
         uint256 wbtcBefore = wbtc.balanceOf(alice);
         uint256 wethBefore = weth.balanceOf(alice);
 
-        vm.prank(alice);
-        hook.redeem(units);
+        vm.startPrank(alice);
+        IERC20Minimal(address(indexToken)).approve(address(hook), indexAmount);
+        hook.redeem(indexAmount);
+        vm.stopPrank();
 
-        assertEq(wbtc.balanceOf(alice), wbtcBefore + amounts[0] * units, "WBTC not received");
-        assertEq(weth.balanceOf(alice), wethBefore + amounts[1] * units, "WETH not received");
-        assertEq(indexToken.balanceOf(alice), 0, "IndexToken not burned");
+        assertEq(wbtc.balanceOf(alice), wbtcBefore + amounts[0] * 2);
+        assertEq(weth.balanceOf(alice), wethBefore + amounts[1] * 2);
+        assertEq(indexToken.balanceOf(alice), 0);
     }
 
     function test_revertRedeemZeroUnits() public {
@@ -199,10 +189,11 @@ contract BundlHookTest is Test {
     function test_revertRedeemInsufficientBacking() public {
         vm.prank(address(hook));
         indexToken.mint(alice, 1e18);
-
-        vm.prank(alice);
+        vm.startPrank(alice);
+        IERC20Minimal(address(indexToken)).approve(address(hook), 1e18);
         vm.expectRevert(BundlHook.InsufficientBacking.selector);
-        hook.redeem(1);
+        hook.redeem(1e18);
+        vm.stopPrank();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -227,8 +218,8 @@ contract BundlHookTest is Test {
     function test_getTotalBacking() public view {
         uint256[] memory backing = hook.getTotalBacking();
         assertEq(backing.length, 2);
-        assertEq(backing[0], 0, "WBTC backing should be 0 initially");
-        assertEq(backing[1], 0, "WETH backing should be 0 initially");
+        assertEq(backing[0], 0);
+        assertEq(backing[1], 0);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -237,7 +228,6 @@ contract BundlHookTest is Test {
 
     function test_revertDirectLiquidityAddition() public {
         usdc.approve(address(modifyLiqRouter), type(uint256).max);
-
         vm.expectRevert();
         modifyLiqRouter.modifyLiquidity(
             indexPoolKey,
@@ -252,19 +242,18 @@ contract BundlHookTest is Test {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // TESTS: Swaps (Buy / Sell)
+    // TESTS: Buy
     // ═══════════════════════════════════════════════════════════════════════
 
     function test_buyExactUsdcForIndex() public {
-        // 100 USDC, 50/50 split -> 50e6 per token
-        // pools at 1:1 -> receive ~50e6 wei of each underlying (minus 0.3% fee)
-        // amountsPerUnit = 1e6 -> units = 50e6 / 1e6 = ~50
-        // indexTokensMinted = 50 * 1e18 = 5e19 (well within uint256)
         usdc.mint(alice, SWAP_USDC_AMOUNT);
         vm.prank(alice);
         usdc.approve(address(swapRouter), SWAP_USDC_AMOUNT);
 
         bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
+
+        uint256 usdcBefore   = usdc.balanceOf(alice);
+        uint256 indexBefore  = indexToken.balanceOf(alice);
 
         vm.prank(alice);
         swapRouter.swap(
@@ -278,17 +267,32 @@ contract BundlHookTest is Test {
             ""
         );
 
-        assertTrue(indexToken.balanceOf(alice) > 0, "Alice did not receive IndexToken");
+        uint256 indexReceived = indexToken.balanceOf(alice) - indexBefore;
+        uint256 usdcSpent     = usdcBefore - usdc.balanceOf(alice);
+        console.log("[BUY]  USDC spent:     ", usdcSpent);
+        console.log("[BUY]  Index received: ", indexReceived);
+        assertTrue(indexReceived > 0, "Alice did not receive IndexToken");
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // TESTS: Sell
+    // ═══════════════════════════════════════════════════════════════════════
+
     function test_sellExactIndexForUsdc() public {
+        // First buy some index tokens
         test_buyExactUsdcForIndex();
 
         uint256 indexBalance = indexToken.balanceOf(alice);
-        assertTrue(indexBalance > 0);
+        assertTrue(indexBalance > 0, "Alice has no index tokens to sell");
+
+        console.log("[SELL] Index to sell:          ", indexBalance);
+        console.log("[SELL] Hook WBTC backing:      ", wbtc.balanceOf(address(hook)));
+        console.log("[SELL] Hook WETH backing:      ", weth.balanceOf(address(hook)));
+        console.log("[SELL] Hook USDC balance:      ", usdc.balanceOf(address(hook)));
+        console.log("[SELL] totalSupply before:     ", indexToken.totalSupply());
 
         vm.prank(alice);
-        indexToken.approve(address(swapRouter), indexBalance);
+        IERC20Minimal(address(indexToken)).approve(address(swapRouter), indexBalance);
 
         bool zeroForOne = Currency.unwrap(indexPoolKey.currency0) == address(usdc);
         uint256 usdcBefore = usdc.balanceOf(alice);
@@ -305,8 +309,14 @@ contract BundlHookTest is Test {
             ""
         );
 
-        assertTrue(usdc.balanceOf(alice) > usdcBefore, "Alice did not receive USDC");
+        uint256 usdcReceived = usdc.balanceOf(alice) - usdcBefore;
+        console.log("[SELL] USDC received:          ", usdcReceived);
+        console.log("[SELL] totalSupply after:      ", indexToken.totalSupply());
+        console.log("[SELL] Alice index remaining:  ", indexToken.balanceOf(alice));
+
+        assertTrue(usdcReceived > 0, "Alice did not receive USDC");
         assertEq(indexToken.balanceOf(alice), 0, "Alice should have sold all IndexToken");
+        assertEq(indexToken.totalSupply(), 0, "totalSupply should be 0 after full sell");
     }
 
     function test_slippageRevert() public {
@@ -367,12 +377,6 @@ contract BundlHookTest is Test {
         bool[]    memory usdcIs0  = new bool[](2);
         uint8[]   memory decimals = new uint8[](2);
 
-        // amountsPerUnit = 1e6 (same magnitude as USDC wei)
-        // With SWAP_USDC_AMOUNT=100e6 and 50/50 split:
-        //   usdcPerToken = 50e6
-        //   underlyingReceived ~ 50e6 (1:1 pool, minus tiny fee)
-        //   units = 50e6 / 1e6 = ~50
-        //   indexTokensMinted = 50 * 1e18 = 5e19 (safe, no overflow)
         tokens[0]   = address(wbtc); amounts[0] = 1e6; weights[0] = 5000;
         poolKeys[0] = wbtcUsdcPoolKey;
         usdcIs0[0]  = Currency.unwrap(wbtcUsdcPoolKey.currency0) == address(usdc);
