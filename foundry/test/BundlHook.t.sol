@@ -287,7 +287,7 @@ contract BundlHookTest is Test {
         console.log("[SELL] Hook WBTC backing:     ", wbtc.balanceOf(address(hook)));
         console.log("[SELL] Hook WETH backing:     ", weth.balanceOf(address(hook)));
 
-        // Alice approves the HOOK directly (not the router) for the sell
+        // Alice approves the HOOK directly (not the router) for IndexToken
         vm.prank(alice);
         IERC20Minimal(address(indexToken)).approve(address(hook), indexBalance);
 
@@ -305,7 +305,9 @@ contract BundlHookTest is Test {
                 amountSpecified: -int256(indexBalance),
                 sqrtPriceLimitX96: !zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
             }),
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            // settleUsingBurn: true tells the router NOT to transferFrom the user
+            // for the specified token — the hook handles it out-of-band
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: true}),
             hookData
         );
 
