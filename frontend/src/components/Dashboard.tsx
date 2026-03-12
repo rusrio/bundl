@@ -5,117 +5,69 @@ import {
   useUnderlyingTokens,
   useAmountsPerUnit,
   useTotalBacking,
-  usePoolStates,
   useNavPerUnit,
-  useUsdcIs0,
+  useSpotPrices,
 } from '@/hooks/useBundlHook';
 import { useIndexTotalSupply } from '@/hooks/useBundlToken';
 import { formatUnits } from 'viem';
 
 const TOKEN_META: Record<number, { symbol: string; name: string; color: string; decimals: number }> = {
   0: { symbol: "WBTC", name: "Wrapped Bitcoin", color: "#f7931a", decimals: 8 },
-  1: { symbol: "WETH", name: "Wrapped Ether", color: "#627eea", decimals: 18 },
+  1: { symbol: "WETH", name: "Wrapped Ether",   color: "#627eea", decimals: 18 },
 };
-
-/**
- * Convert sqrtPriceX96 → human-readable spot price of the underlying token in USDC.
- *
- * sqrtPriceX96 = sqrt(currency1 / currency0) * 2^96  (wei/wei ratio)
- *
- * usdcIs0 = true  (c0=USDC 6dec, c1=token):
- *   rawRatio = tokenWei / usdcWei
- *   price    = (1 / rawRatio) * 10^(tokenDec - usdcDec)
- *
- * usdcIs0 = false (c0=token, c1=USDC 6dec):
- *   rawRatio = usdcWei / tokenWei
- *   price    = rawRatio * 10^(tokenDec - usdcDec)
- */
-function sqrtPriceToUsdcPrice(
-  sqrtPriceX96: bigint,
-  usdcIs0: boolean,
-  usdcDecimals = 6,
-  tokenDecimals = 18
-): number {
-  const sqrtPrice = Number(sqrtPriceX96) / 2 ** 96;
-  const rawRatio = sqrtPrice * sqrtPrice;
-  const decimalAdj = 10 ** (tokenDecimals - usdcDecimals);
-
-  if (usdcIs0) {
-    return rawRatio > 0 ? decimalAdj / rawRatio : 0;
-  } else {
-    return rawRatio * decimalAdj;
-  }
-}
 
 export default function Dashboard() {
   const { data: underlyingAddrs } = useUnderlyingTokens();
-  const { data: amountsPerUnit } = useAmountsPerUnit();
-  const { data: totalBacking } = useTotalBacking();
-  const { data: totalSupply } = useIndexTotalSupply();
-  const { data: poolStates } = usePoolStates();
-  const { data: navRaw } = useNavPerUnit();
-  const { data: usdcIs0Data } = useUsdcIs0();
+  const { data: amountsPerUnit }  = useAmountsPerUnit();
+  const { data: totalBacking }    = useTotalBacking();
+  const { data: totalSupply }     = useIndexTotalSupply();
+  const { data: navRaw }          = useNavPerUnit();
+  const { data: spotPricesRaw }   = useSpotPrices();
 
-  const isLive = underlyingAddrs && amountsPerUnit && totalBacking;
+  const isLive   = !!(underlyingAddrs && amountsPerUnit && totalBacking);
   const numAssets = isLive ? (underlyingAddrs as string[]).length : 2;
   const allocationPct = numAssets > 0 ? Math.floor(100 / numAssets) : 50;
 
-  // NAV per unit: contract returns value scaled to usdcDecimals (6)
+  // NAV: contract returns value in usdcWei (6 decimals)
   const navPerUnit = navRaw ? Number(formatUnits(navRaw as bigint, 6)) : 0;
-  const navDisplay = navPerUnit > 0 ? navPerUnit.toFixed(2) : "—";
+  const navDisplay = navPerUnit > 0 ? navPerUnit.toFixed(2) : '—';
 
-  // Total index supply (18 decimals)
+  // Total supply (18 decimals)
   const supply = totalSupply ? Number(formatUnits(totalSupply as bigint, 18)) : 0;
 
-  const sqrtPrices: bigint[] = poolStates ? (poolStates as any)[0] : [];
-  const ticks: number[] = poolStates ? (poolStates as any)[1] : [];
-  const liquidities: bigint[] = poolStates ? (poolStates as any)[2] : [];
-  const usdcIs0Arr: boolean[] = usdcIs0Data ? (usdcIs0Data as boolean[]) : [];
+  // Spot prices: contract returns usdcWei (6 decimals) per full token
+  const spotPrices: bigint[] = spotPricesRaw ? (spotPricesRaw as bigint[]) : [];
 
   let calcTotalBackingUsd = 0;
 
   const displayTokens = isLive
     ? (underlyingAddrs as string[]).map((_addr: string, i: number) => {
         const meta = TOKEN_META[i] || {
-          symbol: `Asset ${i + 1}`,
-          name: _addr.slice(0, 6) + '...' + _addr.slice(-4),
-          color: '#888',
+          symbol:   `Asset ${i + 1}`,
+          name:     _addr.slice(0, 6) + '...' + _addr.slice(-4),
+          color:    '#888',
           decimals: 18,
         };
 
-        // Use the authoritative usdcIs0 value from the contract
-        const usdcIs0 = usdcIs0Arr[i] ?? false;
-        const spotPrice =
-          sqrtPrices[i] != null
-            ? sqrtPriceToUsdcPrice(sqrtPrices[i], usdcIs0, 6, meta.decimals)
-            : 0;
+        // Spot price comes straight from the contract — no client-side math
+        const spotPriceUsdc = spotPrices[i]
+          ? Number(formatUnits(spotPrices[i], 6))
+          : 0;
 
-        const backingAmount = Number(
-          formatUnits((totalBacking as bigint[])[i], meta.decimals)
-        );
-        calcTotalBackingUsd += backingAmount * spotPrice;
+        const backingAmount = Number(formatUnits((totalBacking as bigint[])[i], meta.decimals));
+        calcTotalBackingUsd += backingAmount * spotPriceUsdc;
 
         return {
           ...meta,
           allocation: allocationPct,
-          backing: backingAmount.toFixed(6),
-          perUnit: Number(
-            formatUnits((amountsPerUnit as bigint[])[i], meta.decimals)
-          ).toFixed(6),
-          spotPrice: spotPrice > 0 ? spotPrice.toFixed(2) : '—',
-          tick: ticks[i] ?? '—',
-          liquidity: liquidities[i] ? liquidities[i].toString() : '—',
+          backing:    backingAmount.toFixed(6),
+          perUnit:    Number(formatUnits((amountsPerUnit as bigint[])[i], meta.decimals)).toFixed(6),
+          spotPrice:  spotPriceUsdc > 0 ? spotPriceUsdc.toFixed(2) : '—',
         };
       })
     : [
-        {
-          symbol: 'WBTC', name: 'Wrapped Bitcoin', color: '#f7931a',
-          allocation: 50, backing: '0.000000', perUnit: '0.000588', spotPrice: '—', tick: '—', liquidity: '—',
-        },
-        {
-          symbol: 'WETH', name: 'Wrapped Ether', color: '#627eea',
-          allocation: 50, backing: '0.000000', perUnit: '0.025000', spotPrice: '—', tick: '—', liquidity: '—',
-        },
+        { symbol: 'WBTC', name: 'Wrapped Bitcoin', color: '#f7931a', allocation: 50, backing: '0.000000', perUnit: '0.000588', spotPrice: '—' },
+        { symbol: 'WETH', name: 'Wrapped Ether',   color: '#627eea', allocation: 50, backing: '0.000000', perUnit: '0.025000', spotPrice: '—' },
       ];
 
   return (
@@ -139,11 +91,8 @@ export default function Dashboard() {
 
             <div className={styles.allocationBar}>
               {displayTokens.map((token: any, i: number) => (
-                <div
-                  key={i}
-                  className={styles.allocationSegment}
-                  style={{ width: `${token.allocation}%`, background: token.color }}
-                />
+                <div key={i} className={styles.allocationSegment}
+                  style={{ width: `${token.allocation}%`, background: token.color }} />
               ))}
             </div>
 

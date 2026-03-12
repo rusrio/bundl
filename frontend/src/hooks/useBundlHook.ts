@@ -41,12 +41,20 @@ export function useNavPerUnit() {
   });
 }
 
-/// Returns bool[] indicating whether USDC is currency0 for each underlying pool.
-/// Used by the frontend to correctly interpret sqrtPriceX96 spot prices.
 export function useUsdcIs0() {
   return useReadContract({
     address: BUNDL_HOOK_ADDRESS,
     abi: BUNDL_HOOK_ABI,
     functionName: 'getUsdcIs0',
+  });
+}
+
+/// Returns spot prices (in USDC, 6 decimals) for all underlying tokens in one call.
+/// This is the canonical source for spot prices — no math needed in the frontend.
+export function useSpotPrices() {
+  return useReadContract({
+    address: BUNDL_HOOK_ADDRESS,
+    abi: BUNDL_HOOK_ABI,
+    functionName: 'getSpotPrices',
   });
 }
