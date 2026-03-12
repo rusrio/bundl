@@ -3,7 +3,7 @@
 import { useState } from "react";
 import styles from "./SwapCard.module.css";
 import { useAccount } from 'wagmi';
-import { useApproveToken, useSwapExactInput, useRedeemIndex } from '@/hooks/useSwap';
+import { useApproveToken, useSwapExactInput, useRedeemIndex, useSellIndex } from '@/hooks/useSwap';
 import { USDC_ADDRESS, BUNDL_TOKEN_ADDRESS } from '@/config/contracts';
 import { useUsdcBalance, useIndexBalance } from '@/hooks/useBundlToken';
 import { parseUnits, formatUnits } from 'viem';
@@ -18,17 +18,17 @@ export default function SwapCard() {
   const { approve: approveUsdc, isPending: isApprovingUsdc } = useApproveToken(USDC_ADDRESS);
   const { approve: approveIndex, isPending: isApprovingIndex } = useApproveToken(BUNDL_TOKEN_ADDRESS);
   const { swap, isPending: isSwapping } = useSwapExactInput();
+  const { sell, isPending: isSelling } = useSellIndex();
   const { redeem, isPending: isRedeeming } = useRedeemIndex();
   const { address } = useAccount();
 
   const { data: usdcBalanceData } = useUsdcBalance(address);
   const { data: indexBalanceData } = useIndexBalance(address);
 
-  // Formatting balances
   const displayUsdcBal = usdcBalanceData ? Number(formatUnits(usdcBalanceData as bigint, 6)).toFixed(2) : "0.00";
   const displayIndexBal = indexBalanceData ? Number(formatUnits(indexBalanceData as bigint, 18)).toFixed(2) : "0.00";
 
-  const isPending = isApprovingUsdc || isApprovingIndex || isSwapping || isRedeeming;
+  const isPending = isApprovingUsdc || isApprovingIndex || isSwapping || isSelling || isRedeeming;
 
   const handleAction = async () => {
     if (!amount || Number(amount) <= 0) return;
@@ -36,11 +36,11 @@ export default function SwapCard() {
       if (activeTab === "buy") {
         const usdcAmount = parseUnits(amount, 6);
         await approveUsdc(usdcAmount);
-        await swap(usdcAmount, true);
+        await swap(usdcAmount);
       } else if (activeTab === "sell") {
         const indexAmount = parseUnits(amount, 18);
-        await approveIndex(indexAmount);
-        await swap(indexAmount, false);
+        // useSellIndex handles approve + sellIndex internally via BundlRouter
+        await sell(BUNDL_TOKEN_ADDRESS, indexAmount, 0n);
       } else if (activeTab === "redeem") {
         const units = parseUnits(amount, 18);
         await approveIndex(units);
@@ -62,7 +62,6 @@ export default function SwapCard() {
     <section id="swap" className={styles.section}>
       <div className={styles.container}>
         <div className={styles.cardWrapper}>
-          {/* Gradient border glow */}
           <div className={styles.cardGlow} />
 
           <div className={styles.card}>
@@ -151,13 +150,7 @@ export default function SwapCard() {
             {/* Output Section */}
             <div className={styles.outputSection}>
               <div className={styles.inputHeader}>
-                <span className={styles.inputLabel}>
-                  {activeTab === "buy"
-                    ? "You receive"
-                    : activeTab === "sell"
-                      ? "You receive"
-                      : "You receive"}
-                </span>
+                <span className={styles.inputLabel}>You receive</span>
               </div>
               <div className={styles.inputRow}>
                 <input
@@ -189,7 +182,6 @@ export default function SwapCard() {
                 </button>
               </div>
 
-              {/* Redeem: show breakdown */}
               {activeTab === "redeem" && (
                 <div className={styles.redeemBreakdown}>
                   <div className={styles.redeemRow}>
@@ -222,7 +214,7 @@ export default function SwapCard() {
                 <ConnectButton />
               </div>
             ) : (
-              <button 
+              <button
                 className={styles.actionBtn}
                 onClick={handleAction}
                 disabled={isPending || !amount || Number(amount) <= 0}
