@@ -10,12 +10,38 @@ const TOKEN_META: Record<number, { symbol: string; name: string; color: string; 
   1: { symbol: "WETH", name: "Wrapped Ether", color: "#627eea", decimals: 18 },
 };
 
-/** Convert sqrtPriceX96 to a human-readable spot price */
-function sqrtPriceToPrice(sqrtPriceX96: bigint, usdcDecimals = 6, tokenDecimals = 18): number {
+/**
+ * Convert sqrtPriceX96 → spot price of the underlying token in USDC.
+ *
+ * Uniswap v4 sqrtPriceX96 encodes:  sqrt( currency1 / currency0 ) * 2^96
+ *
+ * Two pool layouts are possible:
+ *   usdcIs0 = true  → currency0 = USDC (6 dec), currency1 = token
+ *     raw ratio = token_wei / usdc_wei
+ *     price_usdc_per_token = 1 / raw_ratio  * 10^(tokenDecimals - usdcDecimals)
+ *
+ *   usdcIs0 = false → currency0 = token, currency1 = USDC (6 dec)
+ *     raw ratio = usdc_wei / token_wei
+ *     price_usdc_per_token = raw_ratio * 10^(tokenDecimals - usdcDecimals)
+ */
+function sqrtPriceToUsdcPrice(
+  sqrtPriceX96: bigint,
+  usdcIs0: boolean,
+  usdcDecimals = 6,
+  tokenDecimals = 18
+): number {
   const sqrtPrice = Number(sqrtPriceX96) / 2 ** 96;
-  const price = sqrtPrice * sqrtPrice;
-  // price = token1 / token0 in raw units; adjust for decimals
-  return price * 10 ** (tokenDecimals - usdcDecimals);
+  const rawRatio = sqrtPrice * sqrtPrice; // currency1 / currency0 in raw (wei) units
+  const decimalAdj = 10 ** (tokenDecimals - usdcDecimals);
+
+  if (usdcIs0) {
+    // rawRatio = tokenWei / usdcWei  →  price = usdcWei/tokenWei = 1/rawRatio
+    // then adjust decimals: usdcPerToken = (1/rawRatio) * 10^(tokenDec - usdcDec)
+    return rawRatio > 0 ? decimalAdj / rawRatio : 0;
+  } else {
+    // rawRatio = usdcWei / tokenWei  →  price = rawRatio * 10^(tokenDec - usdcDec)
+    return rawRatio * decimalAdj;
+  }
 }
 
 export default function Dashboard() {
@@ -30,14 +56,14 @@ export default function Dashboard() {
   const numAssets = isLive ? (underlyingAddrs as string[]).length : 2;
   const allocationPct = numAssets > 0 ? Math.floor(100 / numAssets) : 50;
 
-  // NAV per unit (USDC, 6 decimals)
+  // NAV per unit: getNavPerUnit() returns a value already scaled to usdcDecimals (6)
   const navPerUnit = navRaw ? Number(formatUnits(navRaw as bigint, 6)) : 0;
-  const navDisplay = navPerUnit > 0 ? navPerUnit.toFixed(4) : "—";
+  const navDisplay = navPerUnit > 0 ? navPerUnit.toFixed(2) : "—";
 
-  // Total supply
+  // Total supply (18 decimals)
   const supply = totalSupply ? Number(formatUnits(totalSupply as bigint, 18)) : 0;
 
-  // Pool spot prices
+  // Pool states
   const sqrtPrices: bigint[] = poolStates ? (poolStates as any)[0] : [];
   const ticks: number[] = poolStates ? (poolStates as any)[1] : [];
   const liquidities: bigint[] = poolStates ? (poolStates as any)[2] : [];
@@ -46,26 +72,47 @@ export default function Dashboard() {
 
   const displayTokens = isLive
     ? (underlyingAddrs as string[]).map((_addr: string, i: number) => {
-        const meta = TOKEN_META[i] || { symbol: `Asset ${i + 1}`, name: _addr.slice(0, 6) + "..." + _addr.slice(-4), color: "#888", decimals: 18 };
-        const spotPrice = sqrtPrices[i] ? sqrtPriceToPrice(sqrtPrices[i], 6, meta.decimals) : 0;
-        const backingAmount = Number(formatUnits(totalBacking[i] as bigint, meta.decimals));
-        
+        const meta = TOKEN_META[i] || {
+          symbol: `Asset ${i + 1}`,
+          name: _addr.slice(0, 6) + "..." + _addr.slice(-4),
+          color: "#888",
+          decimals: 18,
+        };
+
+        // Determine pool orientation: compare addresses lexicographically as the hook does
+        // usdcIs0 = usdc address < token address (same _sortCurrencies logic as deploy)
+        // We can't know usdc address here without context, so we derive it from sqrtPrice magnitude:
+        // For WBTC (dec=8): if usdcIs0, price ~$85k → rawRatio ~1/850, decimalAdj=100 → ~0.12 (wrong)
+        //                   if !usdcIs0, price ~$85k → rawRatio*100 ~85k (correct)
+        // Since we store usdcIs0 per-pool in the hook but don't expose it as a view,
+        // we infer it: if the naive !usdcIs0 formula gives a plausible price (>100 for BTC), use it.
+        const naiveUsdcIs1 = sqrtPrices[i]
+          ? sqrtPriceToUsdcPrice(sqrtPrices[i], false, 6, meta.decimals)
+          : 0;
+        const naiveUsdcIs0 = sqrtPrices[i]
+          ? sqrtPriceToUsdcPrice(sqrtPrices[i], true, 6, meta.decimals)
+          : 0;
+
+        // Heuristic: pick whichever gives a price > 1 USDC (both assets are worth >>$1)
+        // and is the larger value (avoids picking the inverted near-zero result)
+        const spotPrice = naiveUsdcIs1 > naiveUsdcIs0 ? naiveUsdcIs1 : naiveUsdcIs0;
+
+        const backingAmount = Number(formatUnits((totalBacking as bigint[])[i], meta.decimals));
         calcTotalBackingUsd += backingAmount * spotPrice;
 
         return {
           ...meta,
           allocation: allocationPct,
-          backing: backingAmount.toFixed(4),
-          perUnit: Number(formatUnits(amountsPerUnit[i] as bigint, meta.decimals)).toFixed(4),
+          backing: backingAmount.toFixed(6),
+          perUnit: Number(formatUnits((amountsPerUnit as bigint[])[i], meta.decimals)).toFixed(6),
           spotPrice: spotPrice > 0 ? spotPrice.toFixed(2) : "—",
           tick: ticks[i] ?? "—",
           liquidity: liquidities[i] ? liquidities[i].toString() : "—",
         };
       })
     : [
-
-        { symbol: "WBTC", name: "Wrapped Bitcoin", color: "#f7931a", allocation: 50, backing: "0.00", perUnit: "0.001", spotPrice: "—", tick: "—", liquidity: "—" },
-        { symbol: "WETH", name: "Wrapped Ether", color: "#627eea", allocation: 50, backing: "0.00", perUnit: "0.01", spotPrice: "—", tick: "—", liquidity: "—" },
+        { symbol: "WBTC", name: "Wrapped Bitcoin", color: "#f7931a", allocation: 50, backing: "0.000000", perUnit: "0.001000", spotPrice: "—", tick: "—", liquidity: "—" },
+        { symbol: "WETH", name: "Wrapped Ether", color: "#627eea", allocation: 50, backing: "0.000000", perUnit: "0.010000", spotPrice: "—", tick: "—", liquidity: "—" },
       ];
 
   return (
@@ -169,8 +216,23 @@ export default function Dashboard() {
             </div>
             <div className={styles.backingTotal}>
               <span>Total (USDC equivalent)</span>
-              <span className={styles.backingTotalValue}>${calcTotalBackingUsd > 0 ? calcTotalBackingUsd.toFixed(2) : "0.00"}</span>
+              <span className={styles.backingTotalValue}>
+                ${calcTotalBackingUsd > 0 ? calcTotalBackingUsd.toFixed(2) : "0.00"}
+              </span>
             </div>
+          </div>
+
+          {/* ── Supply Card ── */}
+          <div className={styles.card}>
+            <div className={styles.cardHeader}>
+              <h3 className={styles.cardTitle}>Index Token Supply</h3>
+            </div>
+            <div className={styles.navValue}>
+              <span className={styles.navAmount}>{supply > 0 ? supply.toFixed(4) : "0.0000"}</span>
+            </div>
+            <p className={styles.navDescription}>
+              Total units of the index token currently in circulation.
+            </p>
           </div>
         </div>
       </div>
