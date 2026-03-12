@@ -324,6 +324,12 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         return balances;
     }
 
+    /// @notice Returns whether USDC is currency0 for each underlying pool.
+    ///         Used by the frontend to correctly interpret sqrtPriceX96 values.
+    function getUsdcIs0() external view returns (bool[] memory) {
+        return usdcIsCurrency0;
+    }
+
     /// @notice Get sqrtPriceX96, tick, and liquidity for each underlying pool
     function getPoolStates()
         external
@@ -341,7 +347,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         }
     }
 
-    /// @notice Calculate NAV per index unit in USDC (usdcDecimals)
+    /// @notice Calculate NAV per index unit in USDC (scaled to usdcDecimals)
     function getNavPerUnit() external view returns (uint256 navPerUnit) {
         for (uint256 i = 0; i < underlyingTokens.length; i++) {
             (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(underlyingPoolKeys[i].toId());
@@ -620,6 +626,22 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     // INTERNAL: PRICE HELPERS
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// @notice Compute the USDC value (scaled to usdcDecimals) of a given underlying amount.
+    ///
+    /// sqrtPriceX96 encodes sqrt(currency1/currency0) * 2^96.
+    ///
+    /// Case usdcIs0 = true  (c0=USDC, c1=token):
+    ///   price_ratio = (sqrtP/2^96)^2 = tokenWei / usdcWei
+    ///   usdcWei_per_tokenWei = 1 / price_ratio
+    ///   rawValue = underlyingAmount / price_ratio  (in usdcWei * tokenWei/tokenWei = usdcWei)
+    ///   decimal adjustment: rawValue is already in usdcWei units, so
+    ///     if tokenDecimals > usdcDecimals: multiply by 10^(tokenDec - usdcDec)
+    ///     if usdcDecimals > tokenDecimals: divide   by 10^(usdcDec - tokenDec)
+    ///
+    /// Case usdcIs0 = false (c0=token, c1=USDC):
+    ///   price_ratio = (sqrtP/2^96)^2 = usdcWei / tokenWei
+    ///   rawValue = underlyingAmount * price_ratio  (in tokenWei * usdcWei/tokenWei = usdcWei)
+    ///   decimal adjustment: same logic as above.
     function _getUsdcValueOfUnderlying(
         uint160 sqrtPriceX96,
         bool usdcIs0,
@@ -630,19 +652,32 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         uint256 rawValue;
 
         if (usdcIs0) {
+            // price_ratio = tokenWei/usdcWei  =>  usdcWei = underlyingAmount / price_ratio
+            //             = underlyingAmount * (2^96)^2 / sqrtPrice^2
             uint256 intermediate = FullMath.mulDiv(underlyingAmount, 1 << 96, sqrtPrice);
             rawValue = FullMath.mulDiv(intermediate, 1 << 96, sqrtPrice);
+            // rawValue is in usdcWei scale relative to tokenWei.
+            // If tokenDecimals > usdcDecimals, underlyingAmount has more wei precision,
+            // so we must scale UP to compensate: multiply by 10^(tokenDec - usdcDec).
+            if (tokenDecimals > usdcDecimals) {
+                usdcValue = rawValue * (10 ** (tokenDecimals - usdcDecimals));
+            } else if (usdcDecimals > tokenDecimals) {
+                usdcValue = rawValue / (10 ** (usdcDecimals - tokenDecimals));
+            } else {
+                usdcValue = rawValue;
+            }
         } else {
+            // price_ratio = usdcWei/tokenWei  =>  usdcWei = underlyingAmount * price_ratio
+            //             = underlyingAmount * sqrtPrice^2 / (2^96)^2
             uint256 intermediate = FullMath.mulDiv(underlyingAmount, sqrtPrice, 1 << 96);
             rawValue = FullMath.mulDiv(intermediate, sqrtPrice, 1 << 96);
-        }
-
-        if (tokenDecimals > usdcDecimals) {
-            usdcValue = rawValue / (10 ** (tokenDecimals - usdcDecimals));
-        } else if (usdcDecimals > tokenDecimals) {
-            usdcValue = rawValue * (10 ** (usdcDecimals - tokenDecimals));
-        } else {
-            usdcValue = rawValue;
+            if (tokenDecimals > usdcDecimals) {
+                usdcValue = rawValue / (10 ** (tokenDecimals - usdcDecimals));
+            } else if (usdcDecimals > tokenDecimals) {
+                usdcValue = rawValue * (10 ** (usdcDecimals - tokenDecimals));
+            } else {
+                usdcValue = rawValue;
+            }
         }
     }
 
