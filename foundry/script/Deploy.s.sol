@@ -73,6 +73,7 @@ contract DeployScript is Script {
     uint160 constant REQUIRED_FLAGS = uint160(
         Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG
             | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
+            | Hooks.AFTER_SWAP_FLAG
     );
 
     function run() public {
@@ -92,7 +93,7 @@ contract DeployScript is Script {
 
             MockERC20 usdcMock = new MockERC20("USD Coin", "USDC", USDC_DECIMALS);
             MockERC20 wbtcMock = new MockERC20("Wrapped Bitcoin", "WBTC", 8);
-            MockERC20 wethMock = new MockERC20("Wrapped Ether", "WETH", 18);
+            MockERC20 wethMock = new MockERC20("Mock Wrapped Ether", "WETH", 18);
             usdc = address(usdcMock);
             wbtc = address(wbtcMock);
             weth = address(wethMock);
