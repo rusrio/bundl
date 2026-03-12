@@ -7,15 +7,14 @@ export function useApproveToken(tokenAddress: `0x${string}`) {
   const publicClient = usePublicClient();
 
   const approve = async (amount: bigint) => {
-    const hash = await writeContractAsync({
+    const txHash = await writeContractAsync({
       address: tokenAddress,
       abi: ERC20_ABI,
       functionName: 'approve',
       args: [V4_ROUTER_ADDRESS, amount],
     });
-    // Wait for the approval to be mined before returning
-    await publicClient!.waitForTransactionReceipt({ hash });
-    return hash;
+    await publicClient!.waitForTransactionReceipt({ hash: txHash });
+    return txHash;
   };
 
   const { isLoading: isWaiting, isSuccess } = useWaitForTransactionReceipt({ hash });
@@ -58,15 +57,14 @@ export function useSwapExactInput() {
     const testSettings = { takeClaims: false, settleUsingBurn: false };
     const hookData = encodeAbiParameters(parseAbiParameters('uint256'), [minOutput]);
 
-    const hash = await writeContractAsync({
+    const txHash = await writeContractAsync({
       address: V4_ROUTER_ADDRESS,
       abi: V4_ROUTER_ABI,
       functionName: 'swap',
       args: [key, params, testSettings, hookData],
     });
-    // Wait for swap to be mined
-    await publicClient!.waitForTransactionReceipt({ hash });
-    return hash;
+    await publicClient!.waitForTransactionReceipt({ hash: txHash });
+    return txHash;
   };
 
   const { isLoading: isWaiting, isSuccess } = useWaitForTransactionReceipt({ hash });
@@ -79,14 +77,14 @@ export function useRedeemIndex() {
   const publicClient = usePublicClient();
 
   const redeem = async (units: bigint) => {
-    const hash = await writeContractAsync({
+    const txHash = await writeContractAsync({
       address: BUNDL_HOOK_ADDRESS,
       abi: BUNDL_HOOK_ABI,
       functionName: 'redeem',
       args: [units],
     });
-    await publicClient!.waitForTransactionReceipt({ hash });
-    return hash;
+    await publicClient!.waitForTransactionReceipt({ hash: txHash });
+    return txHash;
   };
 
   const { isLoading: isWaiting, isSuccess } = useWaitForTransactionReceipt({ hash });
