@@ -84,11 +84,14 @@ export function useSwapExactInput() {
 // ---------------------------------------------------------------------------
 // SELL: IndexToken → USDC via BundlRouter.sellIndex(key, hookAddress, amount, minUsdc)
 //
-// Generic router — works for any BundlHook index.
-// hookAddress defaults to BUNDL_HOOK_ADDRESS (first index).
+// Uses two separate useWriteContract instances so approve and sellIndex
+// each have independent hash/state — prevents MetaMask from skipping
+// the second popup when both share the same wagmi write hook.
 // ---------------------------------------------------------------------------
 export function useSellIndex(hookAddress?: `0x${string}`) {
-  const { writeContractAsync, data: hash, isPending, error } = useWriteContract();
+  // Separate hooks: one for approve, one for the actual sell
+  const { writeContractAsync: approveAsync, isPending: isApprovePending } = useWriteContract();
+  const { writeContractAsync: sellAsync, data: sellHash, isPending: isSellPending, error } = useWriteContract();
   const publicClient = usePublicClient();
   const { address } = useAccount();
 
@@ -108,17 +111,17 @@ export function useSellIndex(hookAddress?: `0x${string}`) {
 
     const key = { currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: hook };
 
-    // Step 1: approve BundlRouter to pull IndexToken
-    const approveTx = await writeContractAsync({
+    // Step 1: approve BundlRouter to pull IndexToken (independent write instance)
+    const approveTxHash = await approveAsync({
       address: indexTokenAddress,
       abi: ERC20_ABI,
       functionName: 'approve',
       args: [BUNDL_ROUTER_ADDRESS, indexAmount],
     });
-    await publicClient!.waitForTransactionReceipt({ hash: approveTx });
+    await publicClient!.waitForTransactionReceipt({ hash: approveTxHash });
 
-    // Step 2: sell via generic BundlRouter
-    const txHash = await writeContractAsync({
+    // Step 2: sell via generic BundlRouter (independent write instance)
+    const txHash = await sellAsync({
       address: BUNDL_ROUTER_ADDRESS,
       abi: BUNDL_ROUTER_ABI,
       functionName: 'sellIndex',
@@ -128,8 +131,8 @@ export function useSellIndex(hookAddress?: `0x${string}`) {
     return txHash;
   };
 
-  const { isLoading: isWaiting, isSuccess } = useWaitForTransactionReceipt({ hash });
-  return { sell, isPending: isPending || isWaiting, error, isSuccess };
+  const { isLoading: isWaiting, isSuccess } = useWaitForTransactionReceipt({ hash: sellHash });
+  return { sell, isPending: isApprovePending || isSellPending || isWaiting, error, isSuccess };
 }
 
 // ---------------------------------------------------------------------------
