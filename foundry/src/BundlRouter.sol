@@ -7,6 +7,7 @@ import {PoolKey} from "v4-core/src/types/PoolKey.sol";
 import {Currency} from "v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "v4-core/src/types/BalanceDelta.sol";
 import {TickMath} from "v4-core/src/libraries/TickMath.sol";
+import {TransientStateLibrary} from "v4-core/src/libraries/TransientStateLibrary.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -23,18 +24,22 @@ import {BundlHook} from "./BundlHook.sol";
 ///   1. transferFrom(user → router, indexAmount)        outside unlock
 ///   2. unlock()
 ///      a. sync(IndexToken) + transfer(router → PM) + settle()
-///         → PM records +indexAmount IndexToken
+///         → PM records +indexAmount IndexToken credit for router
 ///      b. swap() → hook.beforeSwap (_handleSell):
 ///           - take(IndexToken, hook, indexToBurn)  PM: 0
-///           - burn + sell underlyings → USDC in PM
+///           - burn + sell underlyings → USDC stays in PM
 ///           - specifiedDelta = +indexToBurn, unspecifiedDelta = -usdcOut
-///      c. take(USDC, user, usdcOut)   PM USDC: 0
+///           → router now has a positive USDC delta in PM
+///      c. Read router's USDC delta via TransientStateLibrary
+///      d. take(USDC, user, usdcOut)   PM USDC: 0
 ///   Both PM balances = 0 at unlock close ✓
 contract BundlRouter is IUnlockCallback {
     using SafeERC20 for IERC20;
+    using TransientStateLibrary for IPoolManager;
 
     error NotPoolManager();
     error InsufficientOutput();
+    error NoUsdcReceived();
 
     IPoolManager public immutable poolManager;
 
@@ -65,8 +70,6 @@ contract BundlRouter is IUnlockCallback {
     ) external returns (uint256 usdcReceived) {
         BundlHook hook = BundlHook(hookAddress);
 
-        // Pull IndexToken from user to this router before entering unlock.
-        // Inside unlockCallback we deposit them into PM.
         IERC20(address(hook.indexToken())).safeTransferFrom(
             msg.sender,
             address(this),
@@ -100,17 +103,22 @@ contract BundlRouter is IUnlockCallback {
         address usdcAddr       = hook.usdc();
 
         // ── Step 1: Deposit IndexToken into PM ──────────────────────────
+        // Creates a positive delta (credit) for the router on IndexToken.
         poolManager.sync(Currency.wrap(indexTokenAddr));
         IERC20(indexTokenAddr).safeTransfer(address(poolManager), p.indexAmount);
         poolManager.settle();
-        // PM IndexToken balance: +indexAmount
 
-        // ── Step 2: Swap (triggers hook.beforeSwap / _handleSell) ───────
+        // ── Step 2: Swap → triggers hook._handleSell ─────────────────────
+        // The hook will:
+        //   - take IndexToken from PM (clears router's IndexToken credit)
+        //   - burn + sell underlyings → USDC remains in PM
+        //   - return specifiedDelta=+indexToBurn, unspecifiedDelta=-usdcOut
+        //     which gives the router a positive USDC delta in PM
         bool indexIsCurrency0 =
             Currency.unwrap(p.key.currency0) == indexTokenAddr;
-        bool zeroForOne = indexIsCurrency0; // selling index → usdc
+        bool zeroForOne = indexIsCurrency0;
 
-        BalanceDelta delta = poolManager.swap(
+        poolManager.swap(
             p.key,
             IPoolManager.SwapParams({
                 zeroForOne:        zeroForOne,
@@ -119,23 +127,26 @@ contract BundlRouter is IUnlockCallback {
                     ? TickMath.MIN_SQRT_PRICE + 1
                     : TickMath.MAX_SQRT_PRICE - 1
             }),
-            abi.encode(p.user) // hookData → _handleSell reads user address
+            abi.encode(p.user)
         );
-        // After beforeSwap:
-        //   IndexToken: +deposit - take(hook) + specifiedDelta(+) = 0 ✓
-        //   USDC:       +sellUnderlyings deposited by hook
 
-        // ── Step 3: Take USDC for user ──────────────────────────────────
-        int128 usdcDelta = indexIsCurrency0
-            ? delta.amount1()  // USDC is currency1
-            : delta.amount0(); // USDC is currency0
+        // ── Step 3: Read router's actual USDC credit from transient state ─
+        // With beforeSwapReturnDelta the BalanceDelta returned by swap() to
+        // the caller is the *net* of pool + hook deltas and can be misleading.
+        // currencyDelta() always returns the true outstanding credit/debt for
+        // this address: positive = PM owes us tokens.
+        int256 usdcCredit = poolManager.currencyDelta(
+            address(this),
+            Currency.wrap(usdcAddr)
+        );
 
-        uint256 usdcOut = uint128(usdcDelta < 0 ? -usdcDelta : usdcDelta);
+        if (usdcCredit <= 0) revert NoUsdcReceived();
+        uint256 usdcOut = uint256(usdcCredit);
 
         if (usdcOut < p.minUsdcOut) revert InsufficientOutput();
 
+        // ── Step 4: Deliver USDC to user ─────────────────────────────────
         poolManager.take(Currency.wrap(usdcAddr), p.user, usdcOut);
-        // PM USDC balance: 0 ✓
 
         return abi.encode(usdcOut);
     }
