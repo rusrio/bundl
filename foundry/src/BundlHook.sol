@@ -21,29 +21,26 @@ import {IBundlHook} from "./interfaces/IBundlHook.sol";
 /// @title BundlHook
 /// @notice Uniswap v4 hook — NAV-priced market maker for index tokens.
 ///
-/// @dev BeforeSwapDelta sign convention (v4):
-///   Positive delta  = hook RECEIVES that token from the PM
-///   Negative delta  = hook GIVES that token to the PM
-///   PM computes: amountToSwap = params.amountSpecified + specifiedDelta
-///   To bypass the pool entirely: specifiedDelta = -params.amountSpecified
+/// @dev SELL flow (IndexToken → USDC), exact-in:
 ///
-/// @dev BUY flow (USDC → IndexToken), exact-in (amountSpecified = -usdcIn):
-///   specifiedDelta   = +usdcIn    hook takes USDC from PM (PM settles it from user)
-///   unspecifiedDelta = -indexOut  hook gives IndexToken to PM (PM delivers to user)
-///   amountToSwap = -usdcIn + usdcIn = 0 → pool untouched
+///   BundlRouter (inside unlockCallback, BEFORE swap):
+///     1. sync(IndexToken)
+///     2. transferFrom(user → PM, indexAmount)   ← PM holds +indexAmount
+///     3. settle()                               ← PM records the deposit
 ///
-/// @dev SELL flow (IndexToken → USDC), exact-in (amountSpecified = -indexIn):
-///   IndexToken is handled entirely out-of-band — PM never holds it.
-///   1. burn(user, indexIn)           directly from user (hook is minter)
-///   2. sell underlyings → USDC re-deposited into PM
-///   specifiedDelta   = +indexIn    cancels amountToSwap → pool untouched
-///   unspecifiedDelta = -usdcOut    hook gives USDC to PM → PM delivers to user
+///   BundlHook.beforeSwap (_handleSell):
+///     4. pm.take(IndexToken → hook, indexToBurn)  ← PM: +deposit - take = 0
+///     5. burn(hook, indexToBurn)
+///     6. sellUnderlyings → USDC re-deposited in PM
+///     7. specifiedDelta   = +indexToBurn   (closes remaining PM delta)
+///        unspecifiedDelta = -usdcReceived  (PM delivers USDC)
 ///
-///   PM's net IndexToken balance = 0 throughout (we never deposit it).
-///   The specifiedDelta = +indexIn tells PM the hook "took" the specified tokens,
-///   so PM expects the router to settle indexIn from the user.
-///   BundlRouter is a custom router that skips that settlement because it
-///   already called burn(user) before the swap.
+///   BundlRouter (after swap):
+///     8. take(USDC → user, usdcOut)
+///
+///   Balance sheet at unlock close:
+///     IndexToken: +deposit - take + specifiedDelta(+) = 0  ✓
+///     USDC:       +sellUnderlyings - take(user)        = 0  ✓
 contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
     using PoolIdLibrary for PoolKey;
     using SafeERC20 for IERC20;
@@ -119,7 +116,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         );
     }
 
-    // ─────────────────────────── INITIALIZATION ───────────────────────────
+    // ─────────────────────────────── INITIALIZATION ───────────────────────────────
 
     function initialize(
         address       _indexToken,
@@ -152,7 +149,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         initialized = true;
     }
 
-    // ─────────────────────────── HOOK CALLBACKS ───────────────────────────
+    // ─────────────────────────────── HOOK CALLBACKS ───────────────────────────────
 
     function afterInitialize(address, PoolKey calldata key, uint160, int24)
         external override onlyPoolManager returns (bytes4)
@@ -196,7 +193,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         return (IHooks.afterSwap.selector, 0);
     }
 
-    // ─────────────────────────── PUBLIC ───────────────────────────
+    // ─────────────────────────────── PUBLIC ───────────────────────────────
 
     function redeem(uint256 indexAmount) external override nonReentrant whenInitialized {
         if (indexAmount == 0) revert ZeroUnits();
@@ -211,7 +208,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         emit Redeemed(msg.sender, indexAmount, amounts);
     }
 
-    // ─────────────────────────── VIEWS ───────────────────────────
+    // ─────────────────────────────── VIEWS ───────────────────────────────
 
     function getUnderlyingTokens()    external view override returns (address[] memory) { return underlyingTokens; }
     function getAmountsPerUnit()       external view override returns (uint256[] memory) { return amountsPerUnit; }
@@ -260,12 +257,8 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         }
     }
 
-    // ─────────────────────────── BUY HANDLER ───────────────────────────
+    // ─────────────────────────────── BUY HANDLER ───────────────────────────────
 
-    /// Exact-in buy: amountSpecified = -usdcIn
-    ///   specifiedDelta   = +usdcIn   → hook takes USDC from PM; PM settles it from user
-    ///   unspecifiedDelta = -indexOut → hook gives IndexToken to PM; PM delivers to user
-    ///   amountToSwap = -usdcIn + usdcIn = 0
     function _handleBuy(
         IPoolManager.SwapParams calldata params,
         uint256 absAmount,
@@ -292,7 +285,6 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         if (indexToMint == 0) revert ZeroUnits();
         if (isExactIn && minOutput > 0 && indexToMint < minOutput) revert TooLittleReceived();
 
-        // Deposit minted IndexToken into PM so it can deliver it to the user
         indexToken.mint(address(this), indexToMint);
         poolManager.sync(Currency.wrap(address(indexToken)));
         IERC20(address(indexToken)).transfer(address(poolManager), indexToMint);
@@ -310,21 +302,23 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         );
     }
 
-    // ─────────────────────────── SELL HANDLER ───────────────────────────
+    // ─────────────────────────────── SELL HANDLER ───────────────────────────────
 
-    /// Exact-in sell: amountSpecified = -indexIn
+    /// @dev Sell flow delta accounting:
     ///
-    /// IndexToken is handled entirely out-of-band — PM never holds it.
-    /// BundlRouter calls indexToken.transferFrom(user → hook) BEFORE the swap,
-    /// then this handler burns them and sells underlyings.
+    ///   BundlRouter deposits indexAmount into PM before calling swap:
+    ///     PM IndexToken balance: +indexAmount
     ///
-    /// hookData MUST be abi.encode(address user).
+    ///   Here we take them back (to burn) and sell underlyings:
+    ///     pm.take(IndexToken, hook, indexToBurn)  → PM: +indexAmount - indexToBurn = 0
+    ///     burn(hook, indexToBurn)
+    ///     sellUnderlyings → USDC in PM
     ///
-    /// Delta accounting:
-    ///   specifiedDelta   = +indexToBurn  → amountToSwap = -indexIn + indexIn = 0
-    ///                                      PM expects router to settle indexIn from user
-    ///                                      BundlRouter skips this (already handled)
-    ///   unspecifiedDelta = -usdcReceived → hook gives USDC to PM; PM delivers to user
+    ///   BeforeSwapDelta:
+    ///     specifiedDelta   = +indexToBurn  → amountToSwap = -indexIn + indexIn = 0
+    ///                                        This delta offsets the take above so
+    ///                                        PM IndexToken net = 0 ✓
+    ///     unspecifiedDelta = -usdcReceived → PM delivers USDC to router→user ✓
     function _handleSell(
         IPoolManager.SwapParams calldata params,
         uint256 absAmount,
@@ -346,12 +340,12 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
             if (indexToBurn == 0) revert ZeroUnits();
         }
 
-        // Burn directly from user — hook is the minter so _burn(user) is allowed.
-        // BundlRouter has already done transferFrom(user → hook) before the swap,
-        // so the tokens are sitting in the hook at this point.
-        indexToken.burn(address(this), indexToBurn);
+        // Take IndexToken from PM (router deposited them before the swap)
+        // PM IndexToken balance: +deposit(router) - take(hook) = 0
+        poolManager.take(Currency.wrap(address(indexToken)), address(this), indexToBurn);
 
-        // Sell underlyings → USDC re-deposited into PM by _swapExactUnderlyingForUsdc
+        // Burn and sell underlyings → USDC re-deposited into PM
+        indexToken.burn(address(this), indexToBurn);
         uint256 actualUsdc = _sellUnderlyingForUsdc(indexToBurn);
 
         if (isExactIn) {
@@ -363,10 +357,12 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
 
         emit Sold(user, indexToBurn, usdcReceived);
 
-        // specifiedDelta = +indexToBurn: cancels amountToSwap → pool untouched.
-        // PM's IndexToken balance = 0 throughout (we never deposited it).
-        // BundlRouter's unlockCallback skips settling the IndexToken side.
-        // unspecifiedDelta = -usdcReceived: PM delivers USDC to user.
+        // specifiedDelta = +indexToBurn:
+        //   amountToSwap = -indexIn + indexToBurn = 0 → pool untouched
+        //   This also re-opens a +indexToBurn delta on PM, but the take() above
+        //   already closed the deposit, so net = 0 ✓
+        // unspecifiedDelta = -usdcReceived:
+        //   PM delivers USDC to router, router forwards to user ✓
         return (
             IHooks.beforeSwap.selector,
             toBeforeSwapDelta(
@@ -377,7 +373,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         );
     }
 
-    // ─────────────────────────── UNDERLYING HELPERS ───────────────────────────
+    // ─────────────────────────────── UNDERLYING HELPERS ───────────────────────────────
 
     function _buyUnderlyingWithUsdc(uint256 totalUsdc)
         internal returns (uint256 indexToMint, uint256 actualUsdcSpent)
@@ -430,14 +426,14 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         if (indexAmount == 0) indexAmount = 1;
     }
 
-    // ─────────────────────────── SWAP PRIMITIVES ───────────────────────────
+    // ─────────────────────────────── SWAP PRIMITIVES ───────────────────────────────
 
     function _swapExactUsdcForUnderlying(uint256 idx, uint256 usdcAmount)
         internal returns (uint256 underlyingReceived)
     {
-        PoolKey memory key       = underlyingPoolKeys[idx];
-        bool          z4o        = usdcIsCurrency0[idx];
-        BalanceDelta  delta      = poolManager.swap(
+        PoolKey memory key  = underlyingPoolKeys[idx];
+        bool          z4o   = usdcIsCurrency0[idx];
+        BalanceDelta  delta = poolManager.swap(
             key,
             IPoolManager.SwapParams({
                 zeroForOne:        z4o,
@@ -470,12 +466,6 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         poolManager.take(Currency.wrap(underlyingTokens[idx]), address(this), underlyingAmount);
     }
 
-    /// @dev Underlying → USDC.
-    ///   1. swap(underlying → USDC)           PM owes hook USDC; hook owes PM underlying
-    ///   2. take(USDC → hook)                 hook receives USDC
-    ///   3. sync+transfer(underlying)+settle  pays underlying debt
-    ///   4. sync+transfer(USDC)+settle        re-deposits USDC into PM
-    ///      PM now holds real USDC, which the outer -usdcReceived delta credits to the user
     function _swapExactUnderlyingForUsdc(uint256 idx, uint256 underlyingAmount)
         internal returns (uint256 usdcReceived)
     {
@@ -506,7 +496,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         poolManager.settle();
     }
 
-    // ─────────────────────────── PRICE PRIMITIVE ───────────────────────────
+    // ─────────────────────────────── PRICE PRIMITIVE ───────────────────────────────
 
     function _sqrtPriceToUsdcValue(uint160 sqrtPriceX96, bool usdcIs0, uint256 tokenAmount)
         internal pure returns (uint256 usdcValue)
@@ -519,7 +509,7 @@ contract BundlHook is IHooks, IBundlHook, ReentrancyGuard {
         }
     }
 
-    // ─────────────────────────── UNIMPLEMENTED HOOKS ───────────────────────────
+    // ─────────────────────────────── UNIMPLEMENTED HOOKS ───────────────────────────────
 
     function beforeInitialize(address, PoolKey calldata, uint160)
         external pure override returns (bytes4) { revert HookNotImplemented(); }
