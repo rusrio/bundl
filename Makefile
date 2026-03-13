@@ -1,4 +1,4 @@
-.PHONY: help install build anvil deploy-local sync-local setup-local dev pool-status clean
+.PHONY: help install build anvil deploy-local sync-local setup-local deploy-local-beu sync-local-beu setup-local-beu dev fund pool-status clean
 
 # Default local private key (Foundry's first dev account)
 PRIVATE_KEY := 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
@@ -6,20 +6,24 @@ PRIVATE_KEY := 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff8
 help:
 	@echo "Bundl Index Protocol - Local Development Commands"
 	@echo "-------------------------------------------------"
-	@echo "make install      - Install all backend and frontend dependencies"
-	@echo "make build        - Compile the Foundry smart contracts"
-	@echo "make anvil        - Start a local Anvil node (runs in foreground)"
-	@echo "make deploy-local - Deploy the protocol to the local Anvil node"
-	@echo "make sync-local   - Sync the deployed Anvil addresses to the frontend .env.local"
-	@echo "make setup-local  - Run deploy-local and sync-local together"
-	@echo "make dev          - Start the Next.js frontend development server"
-	@echo "make fund WALLET= - Mint 10,000 USDC and send 10 ETH to the specified wallet"
-	@echo "make pool-status  - Show underlying pool states, NAV, and total backing"
-	@echo "make clean        - Clean build artifacts for both frontend and backend"
+	@echo "make install          - Install all backend and frontend dependencies"
+	@echo "make build            - Compile the Foundry smart contracts"
+	@echo "make anvil            - Start a local Anvil node (runs in foreground)"
+	@echo "make deploy-local     - Deploy the protocol to the local Anvil node"
+	@echo "make sync-local       - Sync the deployed Anvil addresses to the frontend .env.local"
+	@echo "make setup-local      - Run deploy-local and sync-local together"
+	@echo "make deploy-local-beu - Deploy the BTC-ETH-UNI (bBEU) index to Anvil"
+	@echo "make sync-local-beu   - Sync bBEU addresses to the frontend .env.local"
+	@echo "make setup-local-beu  - Run deploy-local-beu and sync-local-beu together"
+	@echo "make dev              - Start the Next.js frontend development server"
+	@echo "make fund WALLET=     - Mint 10,000 USDC and send 10 ETH to the specified wallet"
+	@echo "make pool-status      - Show underlying pool states, NAV, and total backing"
+	@echo "make clean            - Clean build artifacts for both frontend and backend"
 	@echo "-------------------------------------------------"
-	@echo "Suggested workflow: "
+	@echo "Suggested workflow:"
 	@echo "  Terminal 1: make anvil"
 	@echo "  Terminal 2: make setup-local"
+	@echo "  Terminal 2: make setup-local-beu   (optional second index)"
 	@echo "  Terminal 2: make dev"
 
 install:
@@ -43,6 +47,26 @@ sync-local:
 
 setup-local: deploy-local sync-local
 	@echo "Local environment setup complete! You can now run 'make dev'."
+
+deploy-local-beu:
+	@echo "Deploying BTC-ETH-UNI (bBEU) index to local Anvil..."
+	cd foundry && \
+	  PRIVATE_KEY=$(PRIVATE_KEY) \
+	  FACTORY_ADDRESS=$$(jq -r '.bundlFactoryAddress' deploy.json) \
+	  USDC_ADDRESS=$$(jq -r '.usdcAddress' deploy.json) \
+	  WBTC_ADDRESS=$$(jq -r '.wbtcAddress' deploy.json) \
+	  WETH_ADDRESS=$$(jq -r '.wethAddress' deploy.json) \
+	  MODIFY_LIQ_ROUTER_ADDRESS=$$(jq -r '.modifyLiquidityRouterAddress' deploy.json) \
+	  forge script script/DeployBtcEthUni.s.sol:DeployBtcEthUniScript \
+	    --rpc-url http://127.0.0.1:8545 --broadcast --gas-estimate-multiplier 100
+
+sync-local-beu:
+	@echo "Syncing BTC-ETH-UNI environment variables..."
+	chmod +x ./sync-env.sh
+	./sync-env.sh --beu
+
+setup-local-beu: deploy-local-beu sync-local-beu
+	@echo "bBEU index deployed and synced! Restart 'make dev' to pick up new vars."
 
 dev:
 	cd frontend && pnpm dev --port 3000
