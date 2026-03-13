@@ -31,6 +31,7 @@ contract BundlFactory {
         bool[] usdcIs0;
         uint8[] tokenDecimals;
         uint160 sqrtPriceX96;
+        bytes32 hookSalt; // unique per index — prevents CREATE2 collision when deploying multiple hooks
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -86,9 +87,12 @@ contract BundlFactory {
         external
         returns (address hook, address token, PoolId poolId)
     {
+        // hookSalt is appended to the creation code to make the initCodeHash unique per index,
+        // preventing CREATE2 address collisions when multiple hooks are deployed from this factory.
         bytes memory hookCreationCode = abi.encodePacked(
             type(BundlHook).creationCode,
-            abi.encode(poolManager, usdc, usdcDecimals)
+            abi.encode(poolManager, usdc, usdcDecimals),
+            p.hookSalt
         );
 
         bytes32 salt = _mineSalt(hookCreationCode, REQUIRED_FLAGS);

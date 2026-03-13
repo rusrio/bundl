@@ -142,7 +142,8 @@ contract DeployScript is Script {
                 underlyingPools:  pKeys,
                 usdcIs0:          usdcIs0,
                 tokenDecimals:    tokenDecimals,
-                sqrtPriceX96:     SQRT_PRICE_1_1
+                sqrtPriceX96:     SQRT_PRICE_1_1,
+                hookSalt:         keccak256("bBLUE")
             })
         );
 

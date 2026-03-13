@@ -21,52 +21,50 @@ contract DeployBtcEthUniScript is Script {
     // BTC  ≈ $85,000  (8 dec)  → 40% of $100 = $40  → 40/85000 BTC  = 47058 satoshis
     // ETH  ≈ $2,000   (18 dec) → 30% of $100 = $30  → 30/2000  ETH  = 0.015e18
     // UNI  ≈ $10      (18 dec) → 30% of $100 = $30  → 30/10    UNI  = 3e18
-    uint256 constant AMOUNTS_WBTC = 47_058;             // 8 decimals
-    uint256 constant AMOUNTS_WETH = 15_000_000_000_000_000; // 0.015e18
-    uint256 constant AMOUNTS_WUNI = 3_000_000_000_000_000_000; // 3e18
+    uint256 constant AMOUNTS_WBTC = 47_058;
+    uint256 constant AMOUNTS_WETH = 15_000_000_000_000_000;
+    uint256 constant AMOUNTS_WUNI = 3_000_000_000_000_000_000;
 
-    // ── sqrtPriceX96 values ─────────────────────────────────────────────
-    // Reuse the same WBTC/USDC and WETH/USDC prices as Deploy.s.sol
-    // WUNI/USDC: UNI ≈ $10  → price = 10e6/1e18 = 1e-11
-    // sqrtPriceX96 = sqrt(price) * 2^96
-    // If USDC is currency0: price = WUNI/USDC = 1e18/10e6 = 1e11
-    //   sqrtP = sqrt(1e11) * 2^96 ≈ 316227.766 * 79228162514264337593543950336 / 1e18
-    // Precomputed:
+    // ── sqrtPriceX96 for WBTC/USDC and WETH/USDC (same as Deploy.s.sol) ────
     uint160 constant SQRT_PRICE_WBTC_USDC_IS0 = 2717503554927417600000000000;
     uint160 constant SQRT_PRICE_WBTC_USDC_IS1 = 2309878021688305200000000000000;
     uint160 constant SQRT_PRICE_WETH_USDC_IS0 = 1771595571142957200000000000000000;
     uint160 constant SQRT_PRICE_WETH_USDC_IS1 = 3543191142285914300000000;
-    // UNI ≈ $10: sqrtPrice for WUNI/USDC
-    // usdc(6dec) vs wuni(18dec): if usdc < wuni address → usdc is c0
-    //   price in c1/c0 = wuni_amount / usdc_amount = 1e18 / 10e6 = 1e11
-    //   sqrtPriceX96 = sqrt(1e11) * 2^96 = 316227766 * 2^96 / 1e9
-    //                ≈ 25054144837504793000000000000000
-    // if wuni < usdc address → wuni is c0
-    //   price = usdc/wuni = 10e6/1e18 = 1e-11
-    //   sqrtPriceX96 = sqrt(1e-11) * 2^96 ≈ 250541448375
-    uint160 constant SQRT_PRICE_WUNI_USDC_IS0 = 250541448375047930000;
-    uint160 constant SQRT_PRICE_WUNI_USDC_IS1 = 25054144837504793000000000000000;
+
+    // ── sqrtPriceX96 for WUNI/USDC ─────────────────────────────────────
+    // WUNI=c0 (18 dec), USDC=c1 (6 dec), UNI ≈ $10
+    // price_raw = 10e6 / 1e18 = 1e-11
+    // sqrtPriceX96 = sqrt(1e-11) * 2^96 = 250541448375047931186413796
+    uint160 constant SQRT_PRICE_WUNI_USDC_IS1 = 250541448375047931186413796;
+    // If USDC is c0 (usdc < wuni address):
+    // price_raw = 1e18 / 10e6 = 1e11
+    // sqrtPriceX96 = sqrt(1e11) * 2^96 = 25054144837504793118641379600000
+    uint160 constant SQRT_PRICE_WUNI_USDC_IS0 = 25054144837504793118641379600000;
 
     int256  constant LIQ_WBTC_POOL = 17_149_858_512;
     int256  constant LIQ_WETH_POOL = 11_180_339_887_498_948;
-    int256  constant LIQ_WUNI_POOL = 50_000_000_000_000_000; // generous liquidity for $10 token
+    int256  constant LIQ_WUNI_POOL = 2_000_000_000_000_000_000;
+
+    // tick range centered around tick -230270 (UNI=$10 with 18dec/6dec)
+    int24 constant TICK_LOWER_WUNI = -276360;
+    int24 constant TICK_UPPER_WUNI = -184140;
 
     uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
 
     function run() public {
-        uint256 deployerKey     = vm.envUint("PRIVATE_KEY");
-        address deployer        = vm.addr(deployerKey);
-        address factoryAddr     = vm.envAddress("FACTORY_ADDRESS");
-        address usdcAddr        = vm.envAddress("USDC_ADDRESS");
-        address wbtcAddr        = vm.envAddress("WBTC_ADDRESS");
-        address wethAddr        = vm.envAddress("WETH_ADDRESS");
-        address modLiqAddr      = vm.envAddress("MODIFY_LIQ_ROUTER_ADDRESS");
+        uint256 deployerKey        = vm.envUint("PRIVATE_KEY");
+        address deployer           = vm.addr(deployerKey);
+        address factoryAddr        = vm.envAddress("FACTORY_ADDRESS");
+        address usdcAddr           = vm.envAddress("USDC_ADDRESS");
+        address wbtcAddr           = vm.envAddress("WBTC_ADDRESS");
+        address wethAddr           = vm.envAddress("WETH_ADDRESS");
+        address modLiqAddr         = vm.envAddress("MODIFY_LIQ_ROUTER_ADDRESS");
 
         console.log("Deploying BTC-ETH-UNI index on chainId:", block.chainid);
         console.log("Deployer:", deployer);
 
-        BundlFactory factory       = BundlFactory(factoryAddr);
-        IPoolManager poolManager   = factory.poolManager();
+        BundlFactory factory           = BundlFactory(factoryAddr);
+        IPoolManager poolManager       = factory.poolManager();
         PoolModifyLiquidityTest modLiq = PoolModifyLiquidityTest(modLiqAddr);
 
         vm.startBroadcast(deployerKey);
@@ -100,10 +98,10 @@ contract DeployBtcEthUniScript is Script {
         modLiq.modifyLiquidity(
             wuniPool,
             IPoolManager.ModifyLiquidityParams({
-                tickLower:      -887220,
-                tickUpper:       887220,
-                liquidityDelta:  LIQ_WUNI_POOL,
-                salt:            0
+                tickLower:      TICK_LOWER_WUNI,
+                tickUpper:      TICK_UPPER_WUNI,
+                liquidityDelta: LIQ_WUNI_POOL,
+                salt:           0
             }),
             ""
         );
@@ -131,23 +129,23 @@ contract DeployBtcEthUniScript is Script {
         });
 
         // ── Build createBundl params ────────────────────────────────────
-        address[] memory uTokens       = new address[](3);
+        address[] memory uTokens        = new address[](3);
         uint256[] memory amountsPerUnit = new uint256[](3);
-        uint256[] memory weightsBps    = new uint256[](3);
-        PoolKey[]  memory poolKeys     = new PoolKey[](3);
-        bool[]     memory usdcIs0      = new bool[](3);
-        uint8[]    memory decimals     = new uint8[](3);
+        uint256[] memory weightsBps     = new uint256[](3);
+        PoolKey[]  memory poolKeys      = new PoolKey[](3);
+        bool[]     memory usdcIs0       = new bool[](3);
+        uint8[]    memory decimals      = new uint8[](3);
 
-        uTokens[0] = wbtcAddr;  uTokens[1] = wethAddr;  uTokens[2] = wuniAddr;
+        uTokens[0] = wbtcAddr; uTokens[1] = wethAddr; uTokens[2] = wuniAddr;
         amountsPerUnit[0] = AMOUNTS_WBTC;
         amountsPerUnit[1] = AMOUNTS_WETH;
         amountsPerUnit[2] = AMOUNTS_WUNI;
-        weightsBps[0] = 4000;  weightsBps[1] = 3000;  weightsBps[2] = 3000;
+        weightsBps[0] = 4000; weightsBps[1] = 3000; weightsBps[2] = 3000;
         poolKeys[0]  = wbtcPool; poolKeys[1] = wethPool; poolKeys[2] = wuniPool;
         usdcIs0[0]   = usdcIs0Wbtc;
         usdcIs0[1]   = usdcIs0Weth;
         usdcIs0[2]   = usdcIs0Wuni;
-        decimals[0]  = 8;  decimals[1] = 18;  decimals[2] = 18;
+        decimals[0]  = 8; decimals[1] = 18; decimals[2] = 18;
 
         console.log("Deploying bBEU Bundl index...");
         (address hookAddr, address tokenAddr,) = factory.createBundl(
@@ -160,7 +158,8 @@ contract DeployBtcEthUniScript is Script {
                 underlyingPools:  poolKeys,
                 usdcIs0:          usdcIs0,
                 tokenDecimals:    decimals,
-                sqrtPriceX96:     SQRT_PRICE_1_1
+                sqrtPriceX96:     SQRT_PRICE_1_1,
+                hookSalt:         keccak256("bBEU")
             })
         );
         console.log("bBEU Hook:  ", hookAddr);
