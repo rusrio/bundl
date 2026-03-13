@@ -34,19 +34,23 @@ contract DeployBtcEthUniScript is Script {
     // ── sqrtPriceX96 for WUNI/USDC ─────────────────────────────────────
     // WUNI=c0 (18 dec), USDC=c1 (6 dec), UNI ≈ $10
     // price_raw = 10e6 / 1e18 = 1e-11
-    // sqrtPriceX96 = sqrt(1e-11) * 2^96 = 250541448375047931186413796
-    // Observed tick at initialization: -115136
-    uint160 constant SQRT_PRICE_WUNI_USDC_IS1 = 250541448375047931186413796;
+    // sqrtPriceX96 = sqrt(1e-11) * 2^96
+    //             = 3.16227766e-6 * 79228162514264337593543950336
+    //             = 250,541,448,375,048
+    // expected tick ≈ -253302
+    uint160 constant SQRT_PRICE_WUNI_USDC_IS1 = 250541448375048;
     // If USDC is c0 (usdc < wuni address):
-    uint160 constant SQRT_PRICE_WUNI_USDC_IS0 = 25054144837504793118641379600000;
+    // price_raw = 1e18 / 10e6 = 1e11
+    // sqrtPriceX96 = sqrt(1e11) * 2^96 = 316227766 * 2^96 / 1e3 = 25054144837504800000
+    uint160 constant SQRT_PRICE_WUNI_USDC_IS0 = 25054144837504800000;
 
     int256  constant LIQ_WBTC_POOL = 17_149_858_512;
     int256  constant LIQ_WETH_POOL = 11_180_339_887_498_948;
     int256  constant LIQ_WUNI_POOL = 2_000_000_000_000_000_000;
 
-    // tick range centered around observed tick -115136, multiples of tickSpacing=60
-    int24 constant TICK_LOWER_WUNI = -138060;
-    int24 constant TICK_UPPER_WUNI =  -92160;
+    // tick range centered around expected tick -253302 (UNI=$10, WUNI=c0 18dec, USDC=c1 6dec)
+    int24 constant TICK_LOWER_WUNI = -276360;
+    int24 constant TICK_UPPER_WUNI = -230340;
 
     uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
 
