@@ -4,8 +4,8 @@ import { useState } from "react";
 import styles from "./SwapCard.module.css";
 import { useAccount } from 'wagmi';
 import { useApproveToken, useSwapExactInput, useRedeemIndex, useSellIndex } from '@/hooks/useSwap';
-import { USDC_ADDRESS, BUNDL_TOKEN_ADDRESS } from '@/config/contracts';
-import { useUsdcBalance, useIndexBalance } from '@/hooks/useBundlToken';
+import { USDC_ADDRESS, BUNDL_TOKEN_ADDRESS, V4_ROUTER_ADDRESS, BUNDL_ROUTER_ADDRESS, BUNDL_HOOK_ADDRESS } from '@/config/contracts';
+import { useUsdcBalance, useIndexBalance, useTokenAllowance } from '@/hooks/useBundlToken';
 import { parseUnits, formatUnits } from 'viem';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 
@@ -14,6 +14,8 @@ type Tab = "buy" | "sell" | "redeem";
 export default function SwapCard() {
   const [activeTab, setActiveTab] = useState<Tab>("buy");
   const [amount, setAmount] = useState("");
+  const [isExecuting, setIsExecuting] = useState(false);
+
   const { isConnected } = useAccount();
   const { approve: approveUsdc, isPending: isApprovingUsdc } = useApproveToken(USDC_ADDRESS);
   const { approve: approveIndex, isPending: isApprovingIndex } = useApproveToken(BUNDL_TOKEN_ADDRESS);
@@ -25,38 +27,78 @@ export default function SwapCard() {
   const { data: usdcBalanceData } = useUsdcBalance(address);
   const { data: indexBalanceData } = useIndexBalance(address);
 
+  // Allowance checks
+  const { data: usdcAllowance, refetch: refetchUsdcAllowance } = useTokenAllowance(USDC_ADDRESS, address, V4_ROUTER_ADDRESS);
+  const { data: indexAllowance, refetch: refetchIndexAllowance } = useTokenAllowance(BUNDL_TOKEN_ADDRESS, address, BUNDL_ROUTER_ADDRESS);
+
   const displayUsdcBal = usdcBalanceData ? Number(formatUnits(usdcBalanceData as bigint, 6)).toFixed(2) : "0.00";
   const displayIndexBal = indexBalanceData ? Number(formatUnits(indexBalanceData as bigint, 18)).toFixed(2) : "0.00";
 
-  const isPending = isApprovingUsdc || isApprovingIndex || isSwapping || isSelling || isRedeeming;
+  const isPending = isApprovingUsdc || isApprovingIndex || isSwapping || isSelling || isRedeeming || isExecuting;
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+
+  const getNeedsApproval = () => {
+    if (!amount || Number(amount) <= 0) return false;
+    if (activeTab === "buy") {
+      const parsed = parseUnits(amount, 6);
+      return (usdcAllowance ?? 0n) < parsed;
+    }
+    if (activeTab === "sell") {
+      const parsed = parseUnits(amount, 18);
+      return (indexAllowance ?? 0n) < parsed;
+    }
+    return false;
+  };
+
+  const needsApproval = getNeedsApproval();
 
   const handleAction = async () => {
-    if (!amount || Number(amount) <= 0) return;
+    if (!amount || Number(amount) <= 0 || isExecuting) return;
+    setIsExecuting(true);
     try {
       if (activeTab === "buy") {
         const usdcAmount = parseUnits(amount, 6);
-        await approveUsdc(usdcAmount);
-        await swap(usdcAmount);
+        if (needsApproval) {
+          await approveUsdc(usdcAmount);
+          await sleep(500); // Wait for nonce/state sync
+          await refetchUsdcAllowance();
+        } else {
+          await swap(usdcAmount);
+        }
       } else if (activeTab === "sell") {
         const indexAmount = parseUnits(amount, 18);
-        // useSellIndex handles approve + sellIndex internally via BundlRouter
-        await sell(BUNDL_TOKEN_ADDRESS, indexAmount, 0n);
+        if (needsApproval) {
+          await approveIndex(indexAmount, BUNDL_ROUTER_ADDRESS);
+          await sleep(500); // Wait for nonce/state sync
+          await refetchIndexAllowance();
+        } else {
+          await sell(BUNDL_TOKEN_ADDRESS, BUNDL_HOOK_ADDRESS, indexAmount, 0n);
+        }
+
       } else if (activeTab === "redeem") {
         const units = parseUnits(amount, 18);
-        await approveIndex(units);
         await redeem(units);
       }
     } catch (error) {
       console.error("Action failed:", error);
+    } finally {
+      setIsExecuting(false);
     }
   };
 
+
   const getButtonText = () => {
     if (isPending) return "Processing...";
+    if (needsApproval) {
+      return activeTab === "buy" ? "Approve USDC" : "Approve bBTC-ETH";
+    }
     if (activeTab === "buy") return "Buy Index Token";
     if (activeTab === "sell") return "Sell Index Token";
     return "Redeem for Assets";
   };
+
 
   return (
     <section id="swap" className={styles.section}>

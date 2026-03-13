@@ -1,6 +1,7 @@
 {
   "bundlFactoryAddress": "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318",
-  "bundlHookAddress": "0x2cD45afE6261674d4C952ecd51F6595942Bd9888",
+  "bundlHookAddress": "0x7747e14d5734E8EdD2ED600b447BE388E65258c8",
+  "bundlRouterAddress": "0x610178dA211FEF7D417bC0e6FeD39F05609AD788",
   "bundlTokenAddress": "0xe082b26cEf079a095147F35c9647eC97c2401B83",
   "modifyLiquidityRouterAddress": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
   "poolManagerAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",

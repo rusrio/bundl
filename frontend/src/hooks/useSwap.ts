@@ -89,13 +89,13 @@ export function useSwapExactInput() {
 // the second popup when both share the same wagmi write hook.
 // ---------------------------------------------------------------------------
 export function useSellIndex() {
-  const { writeContractAsync: approveAsync, isPending: isApprovePending } = useWriteContract();
   const { writeContractAsync: sellAsync, data: sellHash, isPending: isSellPending, error } = useWriteContract();
   const publicClient = usePublicClient();
   const { address } = useAccount();
 
   const sell = async (
     indexTokenAddress: `0x${string}`,
+    hookAddress: `0x${string}`,
     indexAmount: bigint,
     minUsdc: bigint = 0n,
   ) => {
@@ -104,31 +104,24 @@ export function useSellIndex() {
     const usdc = USDC_ADDRESS;
     const c0 = indexTokenAddress.toLowerCase() < usdc.toLowerCase() ? indexTokenAddress : usdc;
     const c1 = indexTokenAddress.toLowerCase() < usdc.toLowerCase() ? usdc             : indexTokenAddress;
-    const key = { currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: BUNDL_HOOK_ADDRESS };
+    const key = { currency0: c0, currency1: c1, fee: 3000, tickSpacing: 60, hooks: hookAddress };
 
-    // Step 1: approve BundlRouter to pull IndexToken
-    const approveTxHash = await approveAsync({
-      address: indexTokenAddress,
-      abi: ERC20_ABI,
-      functionName: 'approve',
-      args: [BUNDL_ROUTER_ADDRESS, indexAmount],
-    });
-    await publicClient!.waitForTransactionReceipt({ hash: approveTxHash });
-
-    // Step 2: sell — 3 args: key, indexAmount, minUsdc
+    // Step: sell — 4 args: key, hookAddress, indexAmount, minUsdc
     const txHash = await sellAsync({
       address: BUNDL_ROUTER_ADDRESS,
       abi: BUNDL_ROUTER_ABI,
       functionName: 'sellIndex',
-      args: [key, indexAmount, minUsdc],
+      args: [key, hookAddress, indexAmount, minUsdc],
     });
+
     await publicClient!.waitForTransactionReceipt({ hash: txHash });
     return txHash;
   };
 
   const { isLoading: isWaiting, isSuccess } = useWaitForTransactionReceipt({ hash: sellHash });
-  return { sell, isPending: isApprovePending || isSellPending || isWaiting, error, isSuccess };
+  return { sell, isPending: isSellPending || isWaiting, error, isSuccess };
 }
+
 
 // ---------------------------------------------------------------------------
 // REDEEM: burn IndexToken → receive underlying assets (WBTC + WETH)

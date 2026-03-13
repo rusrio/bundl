@@ -32,3 +32,14 @@ export function useUsdcBalance(address?: `0x${string}`) {
     }
   });
 }
+export function useTokenAllowance(tokenAddress: `0x${string}`, owner?: `0x${string}`, spender?: `0x${string}`) {
+  return useReadContract({
+    address: tokenAddress,
+    abi: ERC20_ABI,
+    functionName: 'allowance',
+    args: owner && spender ? [owner, spender] : undefined,
+    query: {
+      enabled: !!owner && !!spender,
+    }
+  });
+}

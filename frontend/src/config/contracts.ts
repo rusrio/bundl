@@ -44,5 +44,6 @@ export const V4_ROUTER_ABI = parseAbi([
 // so sellIndex only needs: key, indexAmount, minUsdc.
 export const BUNDL_ROUTER_ABI = parseAbi([
   'struct PoolKey { address currency0; address currency1; uint24 fee; int24 tickSpacing; address hooks; }',
-  'function sellIndex(PoolKey calldata key, uint256 indexAmount, uint256 minUsdc) external returns (uint256 usdcReceived)',
+  'function sellIndex(PoolKey calldata key, address hookAddress, uint256 indexAmount, uint256 minUsdc) external returns (uint256 usdcReceived)',
 ]);
+
