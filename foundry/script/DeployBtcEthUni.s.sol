@@ -35,19 +35,18 @@ contract DeployBtcEthUniScript is Script {
     // WUNI=c0 (18 dec), USDC=c1 (6 dec), UNI ≈ $10
     // price_raw = 10e6 / 1e18 = 1e-11
     // sqrtPriceX96 = sqrt(1e-11) * 2^96 = 250541448375047931186413796
+    // Observed tick at initialization: -115136
     uint160 constant SQRT_PRICE_WUNI_USDC_IS1 = 250541448375047931186413796;
     // If USDC is c0 (usdc < wuni address):
-    // price_raw = 1e18 / 10e6 = 1e11
-    // sqrtPriceX96 = sqrt(1e11) * 2^96 = 25054144837504793118641379600000
     uint160 constant SQRT_PRICE_WUNI_USDC_IS0 = 25054144837504793118641379600000;
 
     int256  constant LIQ_WBTC_POOL = 17_149_858_512;
     int256  constant LIQ_WETH_POOL = 11_180_339_887_498_948;
     int256  constant LIQ_WUNI_POOL = 2_000_000_000_000_000_000;
 
-    // tick range centered around tick -230270 (UNI=$10 with 18dec/6dec)
-    int24 constant TICK_LOWER_WUNI = -276360;
-    int24 constant TICK_UPPER_WUNI = -184140;
+    // tick range centered around observed tick -115136, multiples of tickSpacing=60
+    int24 constant TICK_LOWER_WUNI = -138060;
+    int24 constant TICK_UPPER_WUNI =  -92160;
 
     uint160 constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
 
