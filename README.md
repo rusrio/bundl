@@ -1,3 +1,5 @@
+<img width="1377" height="476" alt="image" src="https://github.com/user-attachments/assets/11709d65-f376-470f-8f2a-5ab25271dd97" />
+
 # Bundl — On-chain Index Protocol
 
 **Bundl** is a permissionless tokenized index protocol built natively on [Uniswap v4](https://docs.uniswap.org/contracts/v4/overview). Each index is represented by a standard ERC-20 token (e.g. `bBLUE`, `bBEU`) whose price is always equal to its **Net Asset Value (NAV)** — enforced on every swap by a custom Uniswap v4 hook, with no reliance on external arbitrageurs.
