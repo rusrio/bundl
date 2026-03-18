@@ -171,11 +171,6 @@ NAV is computed from `getSlot0().sqrtPriceX96` of each underlying pool — i.e. 
 
 ## Indices
 
-| Symbol | Name | Underlyings |
-|---|---|---|
-| `bBLUE` | Bundl Blue | WBTC · WETH |
-| `bBEU` | Bundl BTC-ETH-UNI | WBTC · WETH · WUNI |
-
 New indices can be deployed permissionlessly via `BundlFactory.createBundl()`.
 
 ---
