@@ -5,19 +5,22 @@
 .card {
   position: relative;
   width: 100%;
-  height: 380px;
-  border-radius: var(--radius-xl);
+  min-height: 420px;
+  border-radius: 32px;
   overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #1d160d;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
 }
 
 .bgImage {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse at 70% 30%, rgba(245, 158, 11, 0.15) 0%, transparent 50%),
-    radial-gradient(ellipse at 30% 60%, rgba(6, 182, 212, 0.08) 0%, transparent 40%),
-    radial-gradient(ellipse at 90% 80%, rgba(234, 88, 12, 0.1) 0%, transparent 40%),
-    linear-gradient(135deg, var(--bg-tertiary) 0%, var(--bg-primary) 100%);
+    radial-gradient(circle at 75% 22%, rgba(245, 158, 11, 0.28), transparent 26%),
+    radial-gradient(circle at 82% 68%, rgba(234, 88, 12, 0.2), transparent 22%),
+    radial-gradient(circle at 22% 28%, rgba(255, 255, 255, 0.05), transparent 22%),
+    linear-gradient(130deg, #352618 0%, #221b10 54%, #17120b 100%);
   transition: transform 0.7s ease;
 }
 
@@ -31,51 +34,82 @@
   position: absolute;
   inset: 0;
   background-image:
-    radial-gradient(circle at 1px 1px, rgba(245, 158, 11, 0.12) 1px, transparent 0);
-  background-size: 24px 24px;
-  mask-image: radial-gradient(ellipse 80% 60% at 60% 40%, black 20%, transparent 80%);
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(120deg, transparent 10%, black 40%, black 85%, transparent 100%);
 }
 
 .overlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(to top, var(--bg-primary) 0%, rgba(34, 27, 16, 0.4) 50%, transparent 100%);
+  background:
+    linear-gradient(90deg, rgba(18, 14, 9, 0.92) 0%, rgba(18, 14, 9, 0.72) 38%, rgba(18, 14, 9, 0.18) 100%),
+    linear-gradient(to top, rgba(18, 14, 9, 0.9) 0%, transparent 40%);
+  z-index: 1;
+}
+
+.orb {
+  position: absolute;
+  right: 7%;
+  top: 14%;
+  width: 240px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.55), transparent 18%),
+    radial-gradient(circle at 50% 50%, rgba(245, 158, 11, 0.38), rgba(234, 88, 12, 0.08) 58%, transparent 70%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    inset 0 0 60px rgba(255, 255, 255, 0.04),
+    0 0 120px rgba(245, 158, 11, 0.16);
+  filter: blur(0.2px);
   z-index: 1;
 }
 
 .content {
   position: absolute;
-  bottom: 0;
-  left: 0;
+  inset: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 380px);
+  align-items: end;
+  gap: var(--space-xl);
   padding: var(--space-2xl);
   z-index: 2;
-  width: 100%;
-  max-width: 66%;
+}
+
+.copy {
+  max-width: 620px;
 }
 
 .badge {
   display: inline-block;
-  padding: var(--space-xs) var(--space-md);
-  background: var(--accent-primary);
-  color: var(--bg-primary);
-  font-size: 0.6875rem;
-  font-weight: 800;
-  letter-spacing: 0.05em;
+  padding: 7px 12px;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  color: #ffd18a;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   border-radius: var(--radius-full);
   margin-bottom: var(--space-lg);
 }
 
 .title {
-  font-size: 2.5rem;
+  max-width: 10ch;
+  font-size: clamp(2.5rem, 4vw, 4rem);
   font-weight: 800;
   color: #fff;
   margin-bottom: var(--space-sm);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.05em;
+  line-height: 0.95;
 }
 
 .description {
-  font-size: 1.0625rem;
-  color: rgba(203, 213, 225, 0.85);
+  max-width: 52ch;
+  font-size: 1rem;
+  color: rgba(229, 229, 229, 0.78);
   line-height: 1.6;
   margin-bottom: var(--space-xl);
 }
@@ -91,8 +125,9 @@
   gap: var(--space-sm);
   background: var(--accent-primary);
   color: var(--bg-primary);
-  padding: var(--space-md) var(--space-xl);
-  border-radius: var(--radius-md);
+  padding: 0 var(--space-xl);
+  min-height: 48px;
+  border-radius: 999px;
   font-weight: 700;
   font-size: 0.9375rem;
   transition: all var(--duration-fast) var(--ease-out);
@@ -104,12 +139,13 @@
 }
 
 .btnSecondary {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(12px);
   color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  padding: var(--space-md) var(--space-xl);
-  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 0 var(--space-xl);
+  min-height: 48px;
+  border-radius: 999px;
   font-weight: 700;
   font-size: 0.9375rem;
   transition: all var(--duration-fast) var(--ease-out);
@@ -119,18 +155,73 @@
   background: rgba(255, 255, 255, 0.2);
 }
 
+.statsCard {
+  justify-self: end;
+  width: 100%;
+  padding: var(--space-xl);
+  border-radius: 26px;
+  background: rgba(20, 15, 10, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(18px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.statsLabel {
+  display: inline-flex;
+  margin-bottom: var(--space-lg);
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-lg);
+}
+
+.statsGrid div {
+  display: grid;
+  gap: 4px;
+}
+
+.statsGrid strong {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.03em;
+}
+
+.statsGrid span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.statsNote {
+  margin-top: var(--space-xl);
+  padding-top: var(--space-lg);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(229, 229, 229, 0.72);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
 @media (max-width: 768px) {
   .card {
-    height: 300px;
+    min-height: 560px;
   }
 
   .content {
-    max-width: 100%;
+    grid-template-columns: 1fr;
     padding: var(--space-lg);
+    align-items: end;
   }
 
   .title {
-    font-size: 1.75rem;
+    max-width: none;
+    font-size: 2.3rem;
   }
 
   .description {
@@ -140,5 +231,15 @@
   .actions {
     flex-direction: column;
     gap: var(--space-sm);
+  }
+
+  .orb {
+    right: -10%;
+    top: 8%;
+    width: 180px;
+  }
+
+  .statsCard {
+    justify-self: stretch;
   }
 }

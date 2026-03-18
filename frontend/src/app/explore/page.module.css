@@ -4,6 +4,94 @@
   padding: var(--space-2xl) var(--space-xl);
 }
 
+.overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.8fr);
+  gap: var(--space-xl);
+  align-items: end;
+  margin-bottom: var(--space-2xl);
+}
+
+.eyebrow {
+  display: inline-flex;
+  margin-bottom: var(--space-sm);
+  color: #ffd18a;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.title {
+  max-width: 14ch;
+  font-size: clamp(2.2rem, 4vw, 4.4rem);
+  line-height: 0.95;
+  letter-spacing: -0.06em;
+}
+
+.subtitle {
+  max-width: 58ch;
+  margin-top: var(--space-lg);
+  color: var(--text-secondary);
+  font-size: 1rem;
+}
+
+.overviewStats {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.overviewStats div {
+  padding: var(--space-lg);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012)),
+    rgba(34, 27, 16, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.overviewStats strong {
+  display: block;
+  color: #fff;
+  font-size: 1.45rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.overviewStats span {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.resultsBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-xl);
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.resultsBar p {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.sortBtn {
+  min-height: 40px;
+  padding: 0 var(--space-lg);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -31,12 +119,29 @@
 }
 
 @media (max-width: 1024px) {
+  .overview {
+    grid-template-columns: 1fr;
+  }
+
   .grid {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 640px) {
+  .main {
+    padding: var(--space-xl) var(--space-lg);
+  }
+
+  .title {
+    max-width: none;
+  }
+
+  .resultsBar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .grid {
     grid-template-columns: 1fr;
   }

@@ -9,33 +9,36 @@
 }
 
 .header {
-  margin-bottom: var(--space-3xl);
+  margin-bottom: var(--space-2xl);
 }
 
 .label {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 600;
+  display: inline-flex;
+  padding: 6px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.14);
+  font-size: 0.72rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--accent-primary);
+  letter-spacing: 0.14em;
+  color: #ffd18a;
   margin-bottom: var(--space-sm);
 }
 
 .title {
-  font-size: 2.25rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: clamp(2rem, 3vw, 3rem);
+  font-weight: 800;
+  letter-spacing: -0.05em;
   margin-bottom: var(--space-sm);
 }
 
 .subtitle {
-  font-size: 1rem;
+  font-size: 0.98rem;
   color: var(--text-secondary);
-  max-width: 480px;
+  max-width: 560px;
+  line-height: 1.65;
 }
-
-/* ── Grid ── */
 
 .grid {
   display: grid;
@@ -44,17 +47,24 @@
 }
 
 .card {
-  background: var(--surface-1);
-  backdrop-filter: blur(16px);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-xl);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012)),
+    rgba(34, 27, 16, 0.76);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 26px;
   padding: var(--space-xl);
-  transition: all var(--duration-normal) var(--ease-out);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition:
+    transform var(--duration-normal) var(--ease-out),
+    border-color var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out);
 }
 
 .card:hover {
-  border-color: var(--border-default);
-  box-shadow: var(--shadow-md);
+  transform: translateY(-3px);
+  border-color: rgba(245, 158, 11, 0.16);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
 }
 
 .cardWide {
@@ -70,17 +80,21 @@
 
 .cardTitle {
   font-size: 1rem;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
+  letter-spacing: -0.02em;
 }
 
 .cardBadge {
-  padding: var(--space-xs) var(--space-md);
+  padding: 6px 10px;
   border-radius: var(--radius-full);
-  background: var(--accent-primary-muted);
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--accent-primary);
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.14);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffd18a;
 }
 
 .liveDot {
@@ -92,23 +106,21 @@
   animation: pulse-glow 2s ease-in-out infinite;
 }
 
-/* ── Allocation Bar ── */
-
 .allocationBar {
   display: flex;
-  height: 8px;
+  height: 12px;
   border-radius: var(--radius-full);
   overflow: hidden;
-  gap: 2px;
+  gap: 4px;
   margin-bottom: var(--space-xl);
+  background: rgba(255, 255, 255, 0.035);
+  padding: 2px;
 }
 
 .allocationSegment {
   border-radius: var(--radius-full);
   transition: width var(--duration-slow) var(--ease-out);
 }
-
-/* ── Token List ── */
 
 .tokenList {
   display: flex;
@@ -121,13 +133,17 @@
   align-items: center;
   justify-content: space-between;
   padding: var(--space-md) var(--space-lg);
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
-  transition: background var(--duration-fast) var(--ease-out);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
 }
 
 .tokenRow:hover {
-  background: var(--surface-3);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(245, 158, 11, 0.12);
 }
 
 .tokenInfo {
@@ -137,15 +153,16 @@
 }
 
 .tokenDot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   flex-shrink: 0;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.03);
 }
 
 .tokenSymbol {
   display: block;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 0.9375rem;
 }
 
@@ -161,17 +178,16 @@
 
 .tokenAllocation {
   display: block;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 0.9375rem;
 }
 
-.tokenPerUnit {
+.tokenPerUnit,
+.tokenName {
   display: block;
   font-size: 0.75rem;
   color: var(--text-tertiary);
 }
-
-/* ── NAV Card ── */
 
 .navValue {
   display: flex;
@@ -182,8 +198,9 @@
 
 .navAmount {
   font-family: var(--font-heading);
-  font-size: 2.5rem;
-  font-weight: 700;
+  font-size: 2.8rem;
+  font-weight: 800;
+  letter-spacing: -0.05em;
 }
 
 .navChange {
@@ -200,8 +217,6 @@
   color: var(--text-tertiary);
   line-height: 1.6;
 }
-
-/* ── Backing Card ── */
 
 .backingList {
   display: flex;
@@ -235,7 +250,7 @@
   align-items: center;
   justify-content: space-between;
   padding-top: var(--space-lg);
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 0.875rem;
   color: var(--text-secondary);
 }
@@ -246,8 +261,6 @@
   font-weight: 700;
   color: var(--text-primary);
 }
-
-/* ── Responsive ── */
 
 @media (max-width: 768px) {
   .grid {

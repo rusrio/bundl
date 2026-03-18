@@ -4,8 +4,38 @@
   padding: var(--space-xl);
 }
 
-.header {
+.hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.85fr);
+  gap: var(--space-xl);
+  padding: clamp(1.5rem, 2.6vw, 2.25rem);
   margin-bottom: var(--space-2xl);
+  border-radius: 32px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(58, 47, 34, 0.72) 0%, rgba(34, 27, 16, 0.92) 58%, rgba(18, 14, 9, 1) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
+}
+
+.heroGlow {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 82% 22%, rgba(245, 158, 11, 0.22), transparent 24%),
+    radial-gradient(circle at 78% 72%, rgba(234, 88, 12, 0.18), transparent 22%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: auto, auto, 36px 36px, 36px 36px;
+  mask-image: linear-gradient(120deg, black 0%, black 72%, transparent 100%);
+  pointer-events: none;
+}
+
+.heroCopy,
+.heroPanel {
+  position: relative;
+  z-index: 1;
 }
 
 .backLink {
@@ -13,8 +43,10 @@
   align-items: center;
   gap: var(--space-sm);
   color: var(--text-tertiary);
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   text-decoration: none;
   margin-bottom: var(--space-lg);
   transition: color var(--duration-fast) var(--ease-out);
@@ -24,19 +56,92 @@
   color: var(--accent-primary);
 }
 
-.title {
-  font-size: 2.25rem;
+.eyebrow {
+  display: inline-flex;
+  margin-bottom: var(--space-sm);
+  color: #ffd18a;
+  font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: -0.02em;
-  margin-bottom: var(--space-xs);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.title {
+  max-width: 12ch;
+  font-size: clamp(2.5rem, 4.5vw, 4.75rem);
+  font-weight: 800;
+  letter-spacing: -0.06em;
+  line-height: 0.94;
+  margin-bottom: var(--space-md);
 }
 
 .subtitle {
+  max-width: 58ch;
   color: var(--text-secondary);
   font-size: 1rem;
+  line-height: 1.65;
 }
 
-/* ── Two-column layout ── */
+.heroMeta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-md);
+  margin-top: var(--space-xl);
+}
+
+.heroMeta div,
+.heroPanel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.heroMeta div {
+  padding: var(--space-lg);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.heroMeta strong,
+.panelGrid strong {
+  display: block;
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.heroMeta span,
+.panelGrid span {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.heroPanel {
+  align-self: end;
+  padding: var(--space-xl);
+  border-radius: 26px;
+  background: rgba(20, 15, 10, 0.56);
+  backdrop-filter: blur(18px);
+}
+
+.panelLabel {
+  display: inline-flex;
+  margin-bottom: var(--space-lg);
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.panelGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-lg);
+}
 
 .layout {
   display: grid;
@@ -49,7 +154,6 @@
   min-width: 0;
 }
 
-/* Remove the default section padding from Dashboard when inside detail page */
 .dashboardCol :global(.section) {
   padding: 0;
 }
@@ -59,17 +163,38 @@
   top: calc(var(--nav-height) + var(--space-lg));
 }
 
-/* Remove the default section padding from SwapCard when inside detail page */
 .swapCol :global(.section) {
   padding: 0;
 }
 
 @media (max-width: 1024px) {
+  .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .heroMeta {
+    grid-template-columns: 1fr;
+  }
+
   .layout {
     grid-template-columns: 1fr;
   }
 
   .swapCol {
     position: static;
+  }
+}
+
+@media (max-width: 640px) {
+  .main {
+    padding: var(--space-lg);
+  }
+
+  .title {
+    max-width: none;
+  }
+
+  .panelGrid {
+    grid-template-columns: 1fr;
   }
 }

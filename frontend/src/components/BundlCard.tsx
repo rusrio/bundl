@@ -4,7 +4,12 @@ import Link from "next/link";
 export interface BundlCardData {
   id: string;
   name: string;
+  category: string;
+  strategy: string;
+  curator: string;
   tokenCount: number;
+  aum: string;
+  rebalancing: string;
   performance7d: number;
   riskLevel: 1 | 2 | 3;
   chartBars: number[];
@@ -24,13 +29,32 @@ function getRiskColor(level: number, bar: number): string {
 export default function BundlCard({ data }: { data: BundlCardData }) {
   const isNegative = data.performance7d < 0;
   const barColor = isNegative ? "var(--error)" : "var(--accent-primary)";
+  const chartId = `bundl-chart-${data.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const chartHeight = 84;
+  const chartWidth = 100;
+  const pointStep =
+    data.chartBars.length > 1 ? chartWidth / (data.chartBars.length - 1) : chartWidth;
+  const points = data.chartBars.map((value, index) => {
+    const x = index * pointStep;
+    const y = chartHeight - (Math.max(0, Math.min(100, value)) / 100) * chartHeight;
+
+    return { x, y };
+  });
+  const polylinePoints = points.map(({ x, y }) => `${x},${y}`).join(" ");
+  const areaPath = points.length
+    ? `M 0 ${chartHeight} L ${points
+        .map(({ x, y }) => `${x} ${y}`)
+        .join(" L ")} L ${chartWidth} ${chartHeight} Z`
+    : "";
+  const lastPoint = points[points.length - 1];
 
   return (
     <Link href={`/bundl/${data.id}`} className={styles.card}>
-      {/* Header */}
+
       <div className={styles.header}>
         <div>
           <h3 className={styles.name}>{data.name}</h3>
+          <p className={styles.strategy}>{data.strategy}</p>
           <div className={styles.tokens}>
             <div className={styles.tokenAvatars}>
               {[0, 1, 2].map((i) => (
@@ -61,39 +85,69 @@ export default function BundlCard({ data }: { data: BundlCardData }) {
         </div>
       </div>
 
-      {/* Mini Bar Chart */}
-      <div className={styles.chart}>
-        {data.chartBars.map((h, i) => (
-          <div
-            key={i}
-            className={styles.bar}
-            style={{
-              height: `${h}%`,
-              background:
-                i < data.chartBars.length - 2
-                  ? `color-mix(in srgb, ${barColor} 25%, transparent)`
-                  : i < data.chartBars.length - 1
-                    ? `color-mix(in srgb, ${barColor} 45%, transparent)`
-                    : `color-mix(in srgb, ${barColor} 65%, transparent)`,
-            }}
-          />
-        ))}
+      <div className={styles.metrics}>
+        <div className={styles.metric}>
+          <span className={styles.metricLabel}>AUM</span>
+          <strong className={styles.metricValue}>{data.aum}</strong>
+        </div>
       </div>
 
-      {/* Footer */}
-      <div className={styles.footer}>
-        <div className={styles.risk}>
-          <span className={styles.riskLabel}>RISK LEVEL</span>
-          <div className={styles.riskBars}>
-            {[1, 2, 3].map((bar) => (
-              <div
-                key={bar}
-                className={styles.riskBar}
-                style={{ background: getRiskColor(data.riskLevel, bar) }}
-              />
-            ))}
-          </div>
+      <div className={styles.chart}>
+        <div className={styles.chartGrid} aria-hidden="true">
+          {[0, 1, 2, 3].map((line) => (
+            <span key={line} className={styles.chartGridLine} />
+          ))}
         </div>
+        <svg
+          className={styles.chartSvg}
+          viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <linearGradient id={`${chartId}-fill`} x1="0" y1="0" x2="0" y2="1">
+              <stop
+                offset="0%"
+                stopColor={`color-mix(in srgb, ${barColor} 38%, transparent)`}
+              />
+              <stop
+                offset="100%"
+                stopColor={`color-mix(in srgb, ${barColor} 4%, transparent)`}
+              />
+            </linearGradient>
+          </defs>
+
+          {areaPath ? (
+            <>
+              <path d={areaPath} fill={`url(#${chartId}-fill)`} />
+              <polyline
+                className={styles.chartLine}
+                points={polylinePoints}
+                style={{ stroke: barColor }}
+              />
+              {points.map(({ x, y }, index) => (
+                <circle
+                  key={index}
+                  cx={x}
+                  cy={y}
+                  r={index === points.length - 1 ? 3.2 : 1.8}
+                  className={index === points.length - 1 ? styles.chartPointActive : styles.chartPoint}
+                  style={{ color: barColor }}
+                />
+              ))}
+            </>
+          ) : null}
+        </svg>
+        {lastPoint ? (
+          <div className={styles.chartBadge} style={{ color: barColor }}>
+            <span className={styles.chartBadgeDot} />
+            7D
+          </div>
+        ) : null}
+      </div>
+
+      <div className={styles.footer}>
+
         <span className={styles.viewBtn}>View Details</span>
       </div>
     </Link>

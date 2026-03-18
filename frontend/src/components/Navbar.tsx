@@ -2,9 +2,12 @@
 
 import styles from "./Navbar.module.css";
 import Link from "next/link";
-import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { usePathname } from "next/navigation";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
 
 export default function Navbar() {
+  const pathname = usePathname();
+
   return (
     <nav className={styles.nav}>
       <div className={styles.inner}>
@@ -35,14 +38,20 @@ export default function Navbar() {
           </Link>
 
           <div className={styles.links}>
-            <Link href="/" className={`${styles.link} ${styles.linkActive}`}>
+            <Link
+              href="/"
+              className={`${styles.link} ${pathname === "/" ? styles.linkActive : ""}`}
+            >
+              Home
+            </Link>
+            <Link
+              href="/explore"
+              className={`${styles.link} ${pathname === "/explore" ? styles.linkActive : ""}`}
+            >
               Explore
             </Link>
-            <Link href="#" className={styles.link}>
-              Portfolio
-            </Link>
-            <Link href="#" className={styles.link}>
-              Academy
+            <Link href="/#how-it-works" className={styles.link}>
+              How It Works
             </Link>
           </div>
         </div>

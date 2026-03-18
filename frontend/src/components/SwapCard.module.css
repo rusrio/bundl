@@ -38,32 +38,76 @@
 .card {
   position: relative;
   z-index: 1;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-2xl);
-  padding: var(--space-lg);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01)),
+    rgba(34, 27, 16, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 28px;
+  padding: var(--space-xl);
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
+  gap: var(--space-sm);
+  box-shadow:
+    0 24px 50px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-/* ── Tabs ── */
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-sm);
+}
+
+.eyebrow {
+  display: inline-flex;
+  margin-bottom: 6px;
+  color: #ffd18a;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.title {
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.14);
+  color: #86efac;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 
 .tabs {
   position: relative;
   display: flex;
-  background: var(--surface-2);
-  border-radius: var(--radius-md);
-  padding: 3px;
-  margin-bottom: var(--space-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 18px;
+  padding: 4px;
+  margin-bottom: var(--space-md);
 }
 
 .tab {
   flex: 1;
-  padding: var(--space-sm) var(--space-lg);
-  border-radius: calc(var(--radius-md) - 3px);
+  min-height: 42px;
+  padding: 0 var(--space-lg);
+  border-radius: 14px;
   font-size: 0.875rem;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-tertiary);
   z-index: 2;
   position: relative;
@@ -76,23 +120,22 @@
 
 .tabIndicator {
   position: absolute;
-  top: 3px;
-  left: 3px;
-  width: calc(33.333% - 2px);
-  height: calc(100% - 6px);
-  background: var(--bg-tertiary);
-  border-radius: calc(var(--radius-md) - 3px);
+  top: 4px;
+  left: 4px;
+  width: calc(33.333% - 2.666px);
+  height: calc(100% - 8px);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
   transition: transform var(--duration-normal) var(--ease-out);
   z-index: 1;
 }
 
-/* ── Input / Output Sections ── */
-
 .inputSection,
 .outputSection {
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
   padding: var(--space-lg);
   transition: border-color var(--duration-fast) var(--ease-out);
 }
@@ -110,13 +153,15 @@
 }
 
 .inputLabel {
-  font-size: 0.8125rem;
-  font-weight: 500;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   color: var(--text-tertiary);
 }
 
 .inputBalance {
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   color: var(--text-tertiary);
 }
 
@@ -132,10 +177,11 @@
   border: none;
   outline: none;
   font-family: var(--font-heading);
-  font-size: 1.75rem;
-  font-weight: 600;
+  font-size: 2rem;
+  font-weight: 700;
   color: var(--text-primary);
   min-width: 0;
+  letter-spacing: -0.04em;
 }
 
 .input::placeholder {
@@ -146,20 +192,21 @@
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
+  min-height: 42px;
+  padding: 0 var(--space-md);
   border-radius: var(--radius-full);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 0.875rem;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
   white-space: nowrap;
   transition: all var(--duration-fast) var(--ease-out);
 }
 
 .tokenSelect:hover {
-  background: var(--bg-elevated);
-  border-color: var(--border-default);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(245, 158, 11, 0.16);
 }
 
 .tokenIcon {
@@ -168,8 +215,6 @@
   border-radius: 50%;
   flex-shrink: 0;
 }
-
-/* ── Arrow ── */
 
 .arrowContainer {
   display: flex;
@@ -183,8 +228,8 @@
 .arrow {
   width: 36px;
   height: 36px;
-  border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  border-radius: 14px;
+  background: rgba(34, 27, 16, 1);
   border: 3px solid var(--bg-primary);
   display: flex;
   align-items: center;
@@ -200,12 +245,10 @@
   background: var(--bg-tertiary);
 }
 
-/* ── Redeem Breakdown ── */
-
 .redeemBreakdown {
   margin-top: var(--space-md);
   padding-top: var(--space-md);
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
@@ -219,15 +262,14 @@
   color: var(--text-secondary);
 }
 
-/* ── Details ── */
-
 .details {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
   padding: var(--space-md) var(--space-lg);
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .detailRow {
@@ -242,12 +284,18 @@
   color: var(--success);
 }
 
-/* ── Action Button ── */
+.footnote {
+  color: var(--text-tertiary);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  padding: 0 var(--space-xs);
+}
 
 .actionBtn {
   width: 100%;
-  padding: var(--space-lg) var(--space-xl);
-  border-radius: var(--radius-lg);
+  min-height: 54px;
+  padding: 0 var(--space-xl);
+  border-radius: 18px;
   background: var(--accent-primary);
   color: var(--bg-primary);
   font-size: 1rem;
@@ -266,11 +314,13 @@
   transform: translateY(0);
 }
 
-/* ── Responsive ── */
-
 @media (max-width: 768px) {
   .section {
     padding: var(--space-2xl) var(--space-lg);
+  }
+
+  .header {
+    flex-direction: column;
   }
 
   .input {

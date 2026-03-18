@@ -107,7 +107,12 @@ export default function SwapCard() {
           <div className={styles.cardGlow} />
 
           <div className={styles.card}>
-            {/* Tabs */}
+            <div className={styles.header}>
+              <div>
+                <h2 className={styles.title}>Trade or redeem</h2>
+              </div>
+            </div>
+
             <div className={styles.tabs}>
               {(["buy", "sell", "redeem"] as Tab[]).map((tab) => (
                 <button
@@ -129,7 +134,6 @@ export default function SwapCard() {
               />
             </div>
 
-            {/* Input Section */}
             <div className={styles.inputSection}>
               <div className={styles.inputHeader}>
                 <span className={styles.inputLabel}>
@@ -174,7 +178,6 @@ export default function SwapCard() {
               </div>
             </div>
 
-            {/* Arrow */}
             <div className={styles.arrowContainer}>
               <div className={styles.arrow}>
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -189,7 +192,6 @@ export default function SwapCard() {
               </div>
             </div>
 
-            {/* Output Section */}
             <div className={styles.outputSection}>
               <div className={styles.inputHeader}>
                 <span className={styles.inputLabel}>You receive</span>
@@ -238,19 +240,6 @@ export default function SwapCard() {
               )}
             </div>
 
-            {/* Details */}
-            <div className={styles.details}>
-              <div className={styles.detailRow}>
-                <span>Rate</span>
-                <span>1 bBTC-ETH = $0.00</span>
-              </div>
-              <div className={styles.detailRow}>
-                <span>Price Impact</span>
-                <span className={styles.detailGreen}>&lt; 0.01%</span>
-              </div>
-            </div>
-
-            {/* Action Button */}
             {!isConnected ? (
               <div style={{ display: 'flex', justifyContent: 'center', marginTop: '1rem' }}>
                 <ConnectButton />

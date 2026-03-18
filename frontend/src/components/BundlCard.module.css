@@ -1,21 +1,80 @@
 .card {
   display: flex;
   flex-direction: column;
-  background: rgba(246, 149, 14, 0.04);
-  border: 1px solid rgba(246, 149, 14, 0.08);
+  position: relative;
+  min-height: 100%;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0%, rgba(255, 255, 255, 0.01) 100%),
+    rgba(34, 27, 16, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-2xl);
-  padding: var(--space-lg);
+  padding: var(--space-xl);
   text-decoration: none;
   color: inherit;
-  transition: all var(--duration-normal) var(--ease-out);
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition:
+    transform var(--duration-normal) var(--ease-out),
+    border-color var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out);
+}
+
+.card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at top right, rgba(245, 158, 11, 0.16), transparent 32%),
+    linear-gradient(135deg, rgba(245, 158, 11, 0.08), transparent 45%);
+  opacity: 0.9;
+  pointer-events: none;
 }
 
 .card:hover {
-  border-color: rgba(246, 149, 14, 0.35);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  transform: translateY(-4px);
+  border-color: rgba(245, 158, 11, 0.3);
+  box-shadow:
+    0 20px 40px rgba(0, 0, 0, 0.32),
+    0 0 0 1px rgba(245, 158, 11, 0.08);
 }
 
-/* ── Header ── */
+.topRow,
+.header,
+.metrics,
+.chart,
+.footer {
+  position: relative;
+  z-index: 1;
+}
+
+.topRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.category {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.14);
+  color: #ffd18a;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.curator {
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 
 .header {
   display: flex;
@@ -25,14 +84,23 @@
 }
 
 .name {
-  font-size: 1.125rem;
-  font-weight: 700;
+  font-size: 1.3rem;
+  font-weight: 800;
   color: var(--text-primary);
   transition: color var(--duration-fast) var(--ease-out);
+  letter-spacing: -0.03em;
 }
 
 .card:hover .name {
   color: var(--accent-primary);
+}
+
+.strategy {
+  max-width: 28ch;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.55;
 }
 
 .tokens {
@@ -59,57 +127,172 @@
 }
 
 .tokenMore {
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   color: var(--text-tertiary);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .perf {
   text-align: right;
+  padding: var(--space-md);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  min-width: 94px;
 }
 
 .perfValue {
   display: block;
-  font-size: 0.875rem;
-  font-weight: 700;
+  font-size: 1rem;
+  font-weight: 800;
 }
 
 .perfLabel {
   display: block;
-  font-size: 0.5625rem;
+  font-size: 0.6rem;
   color: var(--text-tertiary);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   font-weight: 600;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
-/* ── Chart ── */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.metric {
+  padding: var(--space-md) var(--space-lg);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.metricLabel {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.metricValue {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
 
 .chart {
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 64px;
-  padding: 0 var(--space-xs);
-  margin: var(--space-lg) 0;
+  position: relative;
+  height: 84px;
+  padding: var(--space-md);
+  margin: var(--space-sm) 0 var(--space-lg);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.01)),
+    rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  overflow: hidden;
 }
 
-.bar {
-  flex: 1;
-  border-radius: 2px 2px 0 0;
-  min-height: 4px;
-  transition: height var(--duration-slow) var(--ease-out);
+.chart::after {
+  content: "";
+  position: absolute;
+  inset: auto var(--space-md) var(--space-md) var(--space-md);
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06));
 }
 
-/* ── Footer ── */
+.chartGrid,
+.chartSvg {
+  position: absolute;
+  inset: var(--space-md);
+}
+
+.chartGrid {
+  display: grid;
+  align-content: space-between;
+  pointer-events: none;
+}
+
+.chartGridLine {
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.chartSvg {
+  width: calc(100% - (var(--space-md) * 2));
+  height: calc(100% - (var(--space-md) * 2));
+  overflow: visible;
+}
+
+.chartLine {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.16));
+  transition:
+    transform var(--duration-normal) var(--ease-out),
+    opacity var(--duration-normal) var(--ease-out);
+}
+
+.chartPoint,
+.chartPointActive {
+  fill: currentColor;
+}
+
+.chartPoint {
+  opacity: 0.45;
+}
+
+.chartPointActive {
+  stroke: rgba(20, 15, 10, 0.95);
+  stroke-width: 1.6;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, currentColor 28%, transparent));
+}
+
+.chartBadge {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(18, 14, 9, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.chartBadgeDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 12px color-mix(in srgb, currentColor 50%, transparent);
+}
+
+.card:hover .chartLine {
+  transform: translateY(-1px);
+}
 
 .footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-lg);
   padding-top: var(--space-lg);
-  border-top: 1px solid rgba(246, 149, 14, 0.08);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   margin-top: auto;
 }
 
@@ -139,16 +322,47 @@
 }
 
 .viewBtn {
-  padding: var(--space-sm) var(--space-lg);
-  border-radius: var(--radius-md);
-  background: rgba(246, 149, 14, 0.1);
-  color: var(--accent-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 var(--space-lg);
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.08);
+  color: #ffd18a;
   font-size: 0.8125rem;
   font-weight: 700;
-  transition: all var(--duration-fast) var(--ease-out);
+  letter-spacing: 0.04em;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
 }
 
 .card:hover .viewBtn {
   background: var(--accent-primary);
   color: var(--bg-primary);
+  transform: translateX(2px);
+}
+
+@media (max-width: 640px) {
+  .card {
+    padding: var(--space-lg);
+  }
+
+  .topRow,
+  .header,
+  .footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .perf {
+    width: 100%;
+    text-align: left;
+  }
+
+  .metrics {
+    grid-template-columns: 1fr;
+  }
 }
